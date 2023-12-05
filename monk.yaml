@@ -1,0 +1,60 @@
+namespace: snake-game
+
+cobra-game-backend:
+  defines: runnable
+  metadata:
+    name: cobra-game-backend
+    description: >-
+      Backend service for the Cobra game, providing high-score management and
+      serving static files.
+    icon: https://emojiapi.dev/api/v1/robot.svg
+  containers:
+    cobra-game-backend:
+      image: env-2123.registry.local/cobra-game-backend:main-832e075
+      build: .
+      dockerfile: Dockerfile.cobra-game-backend
+  services:
+    http-server:
+      description: HTTP server listening port
+      container: cobra-game-backend
+      port: 3001
+      host-port: 3001
+      publish: true
+      protocol: tcp
+  connections:
+    database-connection:
+      target: snake-game/mongodb
+      service: mongodb-port
+      optional: true
+      description: Connection to MongoDB for high-score management
+  variables:
+    db-host:
+      env: DB_HOST
+      type: string
+      value: <- connection-hostname("database-connection")
+      description: Hostname for the MongoDB database
+    db-port:
+      env: DB_PORT
+      type: int
+      value: <- connection-port("database-connection")
+      description: Port for the MongoDB database
+    db-name:
+      env: DB_NAME
+      type: string
+      value: cobra_game_db
+      description: Database name for the MongoDB database
+    db-user:
+      env: DB_USER
+      type: string
+      value: cobra_user
+      description: Username for the MongoDB database
+    db-pass:
+      env: DB_PASS
+      type: string
+      value: securepassword123
+      description: Password for the MongoDB database
+
+stack:
+  defines: group
+  members:
+    - snake-game/cobra-game-backend
