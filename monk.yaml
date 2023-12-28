@@ -1,0 +1,91 @@
+namespace: snake-game
+
+mongodb:
+  defines: runnable
+  inherits: mongodb/mongodb
+  metadata:
+    name: mongodb
+    description: MongoDB database service required for the high scores feature.
+    icon: >-
+      https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRA8VbFgxH-i78AZmNqD93mVRkTRd30POqLeCmg9T05ug&s
+  variables:
+    mongo-image:
+      type: string
+      value: latest
+      description: ''
+    mongo-init-database:
+      type: string
+      value: mongo
+      description: ''
+    mongo-init-password:
+      type: string
+      value: password
+      description: ''
+    mongo-init-username:
+      type: string
+      value: mongo
+      description: ''
+    mongodb-image:
+      type: string
+      value: latest
+      description: ''
+
+snake-game:
+  defines: runnable
+  metadata:
+    name: snake-game
+    description: >-
+      A Node.js web application serving a static snake game and managing high
+      scores with MongoDB.
+    icon: https://emojiapi.dev/api/v1/robot.svg
+  containers:
+    snake-game:
+      image: env-4356.registry.local/snake-game:main-832e075
+      build: .
+      dockerfile: Dockerfile.snake-game
+  services:
+    web-server-port:
+      description: Port for the web server serving the snake game
+      container: snake-game
+      port: 3001
+      host-port: 3001
+      publish: true
+      protocol: tcp
+  connections:
+    mongodb-connection:
+      target: snake-game/mongodb
+      service: mongodb
+      optional: true
+      description: Connection to the MongoDB database service for high scores feature
+  variables:
+    db-host:
+      env: DB_HOST
+      type: string
+      value: <- connection-hostname("mongodb-connection")
+      description: Hostname for the MongoDB database
+    db-port:
+      env: DB_PORT
+      type: int
+      value: <- connection-port("mongodb-connection")
+      description: Port for the MongoDB database
+    db-name:
+      env: DB_NAME
+      type: string
+      value: snakeGame
+      description: Database name for the MongoDB database
+    db-user:
+      env: DB_USER
+      type: string
+      value: user
+      description: Username for the MongoDB database
+    db-pass:
+      env: DB_PASS
+      type: string
+      value: password
+      description: Password for the MongoDB database
+
+stack:
+  defines: group
+  members:
+    - snake-game/mongodb
+    - snake-game/snake-game
