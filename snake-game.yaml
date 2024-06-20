@@ -1,0 +1,56 @@
+namespace: snake-game
+snake-game:
+  defines: runnable
+  metadata:
+    name: snake-game
+    description: A simple snake game, which saves the user's highscores to a MongoDB
+    icon: https://emojiapi.dev/api/v1/snake.svg
+  containers:
+    snake-game:
+      build: .
+  services:
+    http:
+      container: snake-game
+      port: 3001
+      host-port: 3001
+      publish: false
+      protocol: TCP
+      description: The port the fastify server listens on
+  connections:
+    db:
+      target: snake-game/mongodb
+      service: mongodb
+  variables:
+    db-host:
+      env: DB_HOST
+      type: string
+      description: Database host
+      value: <- connection-hostname("db")
+    db-port:
+      env: DB_PORT
+      type: string
+      description: Database port
+      value: <- connection-port("db")
+    db-name:
+      env: DB_NAME
+      type: string
+      description: Name of the database
+      value: snake
+    db-user:
+      env: DB_USER
+      type: string
+      description: Database user
+      value: '!!!SETME!!!'
+    db-pass:
+      env: DB_PASS
+      type: string
+      description: Database password
+      value: '!!!SETME!!!'
+mongodb:
+  defines: runnable
+  inherits: mongodb/mongodb
+stack:
+  defines: group
+  runnable-list:
+    - snake-game/snake-game
+    - snake-game/mongodb
