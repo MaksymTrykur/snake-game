@@ -1,0 +1,6 @@
+REPO snake-game
+LOAD snake-game.yaml
+ENV dev prod
+ENTRY dev:snake-game/dev
+ENTRY prod:snake-game/prod
+IMAGE snake-game:latest snake-game/app/snake-game-dev,snake-game/app/snake-game-prod . Dockerfile

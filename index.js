@@ -7,7 +7,7 @@ const mongoose = require('mongoose');
 
 const path = require('path');
 
-const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS } = process.env;
+const { DB_CONN } = process.env;
 
 // add static middleward
 fastify.register(require('@fastify/static'), {
@@ -44,10 +44,13 @@ fastify.get('/highscore', async (request, reply) => {
 // Run the server!
 const start = async () => {
     try {
-        const dbCred = DB_USER ? `${DB_USER}:${DB_PASS}@` : '';
-        const connectionString = `mongodb://${dbCred}${DB_HOST}:${DB_PORT}/${DB_NAME}?authSource=admin`;
-        await mongoose.connect(connectionString, {user: DB_USER, pass: DB_PASS, useNewUrlParser: true, useUnifiedTopology: true});
-        console.log('MongoDB connected...');
+        const dbConn = (DB_CONN ?? '').trim();
+        if (!dbConn) {
+            fastify.log.warn('DB_CONN not set; starting without MongoDB (highscore routes will be unavailable)');
+        } else {
+            await mongoose.connect(dbConn, { useNewUrlParser: true, useUnifiedTopology: true });
+            console.log('MongoDB connected...');
+        }
         await fastify.listen({
             port: 3001,
             host: '0.0.0.0',
