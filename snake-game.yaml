@@ -1,0 +1,62 @@
+namespace: snake-game
+
+mongodb:
+  defines: runnable
+  inherits: mongodb/mongodb
+  variables:
+    mongo-init-database:
+      type: string
+      value: snake-game
+      env: MONGO_INITDB_DATABASE
+    mongo-init-username:
+      type: string
+      value: snake-game
+      env: MONGO_INITDB_ROOT_USERNAME
+    mongo-init-password:
+      type: string
+      value: <- secret("mongodb-root-password")
+      env: MONGO_INITDB_ROOT_PASSWORD
+  permitted-secrets:
+    mongodb-root-password: true
+
+app:
+  defines: runnable
+  containers:
+    app:
+      image: snake-game:latest
+  services:
+    http:
+      container: app
+      port: 3001
+      protocol: tcp
+      ingress-routes:
+        main:
+          path-prefix: /
+  connections:
+    mongodb:
+      target: snake-game/mongodb
+      service: mongodb
+  depends:
+    wait-for:
+      runnables:
+        - snake-game/mongodb
+      timeout: 120
+  scale:
+    value: 1
+  variables:
+    node-env:
+      type: string
+      value: production
+      env: NODE_ENV
+    db-conn:
+      type: string
+      value: <- "mongodb://snake-game:" secret("mongodb-root-password") "@" connection-hostname("mongodb") ":" connection-port("mongodb") "/snake-game?authSource=admin" concat-all
+      env: DB_CONN
+  permitted-secrets:
+    mongodb-root-password: true
+
+prod:
+  defines: group
+  members:
+    - snake-game/mongodb
+    - snake-game/app

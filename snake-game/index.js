@@ -9,7 +9,7 @@ const path = require('path');
 
 const { DB_CONN } = process.env;
 
-// add static middleward
+// add static middleware
 fastify.register(require('@fastify/static'), {
     root: path.join(__dirname, 'public', 'cobra'),
 });
