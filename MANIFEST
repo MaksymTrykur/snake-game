@@ -1,6 +1,19 @@
 REPO snake-game
+
 LOAD snake-game.yaml
-ENV dev prod
-ENTRY dev:snake-game/dev
+
+ENV dev staging prod
+
+# User-provided secret used for MongoDB root password (also used by the app to connect)
+SECRET mongodb-root-password
+
+# Default entrypoint (prod target)
+ENTRY snake-game/prod
+ENTRY dev:snake-game/prod
+ENTRY staging:snake-game/prod
 ENTRY prod:snake-game/prod
-IMAGE snake-game:latest snake-game/app/snake-game-dev,snake-game/app/snake-game-prod . Dockerfile
+
+# Pre-built image referenced by snake-game/app
+IMAGE snake-game:latest snake-game/app . Dockerfile
+
+# No external blobs needed (static files are baked into the image)

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Snake Game</title>
+    <style>
+      html, body {
+        overflow: hidden;
+        display:flex;
+        justify-content: center;
+        align-items: center;
+
+      }
+      body {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        overflow: hidden;
+      }
+      canvas {
+        border: 1px solid black;
+        background-color: #f2f2f2;
+        font-family: Arial, sans-serif;
+      }
+      #score {
+        padding: 0 20px;
+        height: 400px;
+        width: 200px;
+        font-family: Monaco, 'Courier New', Courier, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas" width="400" height="400"></canvas>
+    <div id="score">
+      <ol id="scores"></ol>
+    </div>
+    <script src="snake.js"></script>
+  </body>
+</html>

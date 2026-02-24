@@ -1,121 +1,62 @@
 namespace: snake-game
 
-infra/mongodb-dev:
-  defines: digitalocean-database/database
-  name: snake-game-mongodb-dev
-  engine: mongodb
-  version: "7.0"
-  region: nyc1
-  num_nodes: 1
-  size: db-s-1vcpu-1gb
-  tags:
-    - "app:snake-game"
-    - "environment:dev"
-  services:
-    data:
-      protocol: custom
-
-infra/mongodb-prod:
-  defines: digitalocean-database/database
-  name: snake-game-mongodb-prod
-  engine: mongodb
-  version: "7.0"
-  region: nyc1
-  num_nodes: 1
-  size: db-s-1vcpu-2gb
-  tags:
-    - "app:snake-game"
-    - "environment:prod"
-  services:
-    data:
-      protocol: custom
-
-app/snake-game-dev:
+mongodb:
   defines: runnable
+  inherits: mongodb/mongodb
+  variables:
+    mongo-init-database:
+      type: string
+      value: snake-game
+      env: MONGO_INITDB_DATABASE
+    mongo-init-username:
+      type: string
+      value: snake-game
+      env: MONGO_INITDB_ROOT_USERNAME
+    mongo-init-password:
+      type: string
+      value: <- secret("mongodb-root-password")
+      env: MONGO_INITDB_ROOT_PASSWORD
+  permitted-secrets:
+    mongodb-root-password: true
 
+app:
+  defines: runnable
   containers:
     app:
       image: snake-game:latest
-
   services:
     http:
       container: app
       port: 3001
-      host-port: 8080
       protocol: tcp
-      publish: true
-
-  checks:
-    readiness:
-      code: 'http-get("http://localhost:3001/") nil? not'
-      period: 10
-      initialDelay: 5
-      attempts: 12
-
+      ingress-routes:
+        main:
+          path-prefix: /
   connections:
     mongodb:
-      target: snake-game/infra/mongodb-dev
-      service: data
-
+      target: snake-game/mongodb
+      service: mongodb
   depends:
     wait-for:
       runnables:
-        - snake-game/infra/mongodb-dev
-      timeout: 900
-
+        - snake-game/mongodb
+      timeout: 120
   scale:
     value: 1
-
-  requirements:
-    CPU: "0.25"
-    RAM: 512
-
   variables:
     node-env:
       type: string
+      value: production
       env: NODE_ENV
-      value: development
     db-conn:
       type: string
+      value: <- "mongodb://snake-game:" secret("mongodb-root-password") "@" connection-hostname("mongodb") ":" connection-port("mongodb") "/snake-game?authSource=admin" concat-all
       env: DB_CONN
-      value: <- connection-target("mongodb") entity-state get-in("connection_uri") or connection-target("mongodb") entity-state get-in("connection_srv") or ""
-
-app/snake-game-prod:
-  defines: runnable
-  inherits: snake-game/app/snake-game-dev
-
-  connections:
-    mongodb:
-      target: snake-game/infra/mongodb-prod
-      service: data
-
-  depends:
-    wait-for:
-      runnables:
-        - snake-game/infra/mongodb-prod
-      timeout: 900
-
-  scale:
-    value: 2
-
-  requirements:
-    CPU: "0.5"
-    RAM: 1024
-
-  variables:
-    node-env:
-      type: string
-      env: NODE_ENV
-      value: production
-
-dev:
-  defines: group
-  members:
-    - snake-game/infra/mongodb-dev
-    - snake-game/app/snake-game-dev
+  permitted-secrets:
+    mongodb-root-password: true
 
 prod:
   defines: group
   members:
-    - snake-game/infra/mongodb-prod
-    - snake-game/app/snake-game-prod
+    - snake-game/mongodb
+    - snake-game/app
