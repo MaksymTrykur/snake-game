@@ -48,6 +48,11 @@ fi
 MONKCODE=$(jq -r '.cluster.monkcode // empty' /tmp/env_response.json)
 CLUSTER_ID=$(jq -r '.cluster.clusterId // empty' /tmp/env_response.json)
 
+# Best-effort: mark capsule metadata as destroyed before deleting records.
+NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+CAPSULE_DESTROY_PAYLOAD=$(jq -n     --arg branch "$ENVIRONMENT_NAME"     --arg status "destroyed"     --arg now "$NOW_UTC"     '{settings:{capsule:{source:"dynenv",branch:$branch,status:$status,lastDestroyedAt:$now,updatedAt:$now}}}')
+curl -sf -X PATCH     "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME"     -H "$AUTH_HEADER"     -H "Content-Type: application/json"     -d "$CAPSULE_DESTROY_PAYLOAD" > /dev/null 2>&1 || true
+
 if [ -z "$MONKCODE" ]; then
     printf "${YELLOW}No cluster linked to environment. Cleaning up backend records only.${NC}\n"
 else

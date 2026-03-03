@@ -76,6 +76,10 @@ if [ -z "$MONKCODE" ] || [ "$MONKCODE" = "null" ]; then
 fi
 printf "${GREEN}Cluster created. ID: $CLUSTER_ID${NC}\n"
 
+# A.5.1 Enable ingress plugin
+printf "${GREEN}Enabling ingress plugin...${NC}\n"
+monk plugins enable ingress || printf "${YELLOW}Warning: Failed to enable ingress plugin (non-blocking)${NC}\n"
+
 # A.6 Set up per-cluster container registry
 printf "${GREEN}Setting up container registry...${NC}\n"
 
@@ -315,7 +319,7 @@ printf "${GREEN}Registry credentials stored as cluster secret.${NC}\n"
 # A.7 Inject workload secrets
 
 printf "${GREEN}Seeding workload secrets into cluster...${NC}\n"
-    monk secrets add -g "mongodb-root-password=$mongodb-root-password"
+    monk secrets add -g "default-vercel-token=$DEFAULT_VERCEL_TOKEN"
 printf "${GREEN}Workload secrets configured.${NC}\n"
 
 
@@ -339,10 +343,44 @@ printf "${GREEN}Cluster registered.${NC}\n"
 
 # B.2 Create environment and link to cluster
 printf "${GREEN}Creating environment: $ENVIRONMENT_NAME...${NC}\n"
+BRANCH_NAME="${BRANCH_NAME:-$ENVIRONMENT_NAME}"
+GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}"
+GITHUB_ENVIRONMENT="${GITHUB_ENVIRONMENT:-capsule-$ENVIRONMENT_NAME}"
+NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+ENV_PAYLOAD=$(jq -n \
+    --arg name "$ENVIRONMENT_NAME" \
+    --arg clusterId "$CLUSTER_ID" \
+    --arg projectSlug "$MONK_PROJECT_SLUG" \
+    --arg branch "$BRANCH_NAME" \
+    --arg repository "$GITHUB_REPOSITORY" \
+    --arg orgSlug "$MONK_ORG_SLUG" \
+    --arg capsuleProjectSlug "$MONK_PROJECT_SLUG" \
+    --arg clusterName "$CLUSTER_NAME" \
+    --arg githubEnvironment "$GITHUB_ENVIRONMENT" \
+    --arg status "provisioning" \
+    --arg now "$NOW_UTC" \
+    '{
+      name: $name,
+      clusterId: $clusterId,
+      projectSlug: $projectSlug,
+      settings: {
+        capsule: {
+          source: "dynenv",
+          branch: $branch,
+          repository: $repository,
+          orgSlug: $orgSlug,
+          projectSlug: $capsuleProjectSlug,
+          clusterName: $clusterName,
+          githubEnvironment: $githubEnvironment,
+          status: $status,
+          updatedAt: $now
+        }
+      }
+    }')
 HTTP_CODE=$(curl -s -o /tmp/env_response.json -w "%{http_code}" -X POST "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/environments" \
     -H "$AUTH_HEADER" \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"$ENVIRONMENT_NAME\",\"clusterId\":\"$CLUSTER_ID\",\"projectSlug\":\"$MONK_PROJECT_SLUG\"}")
+    -d "$ENV_PAYLOAD")
 if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
     printf "${RED}Error: Failed to create environment in backend (HTTP $HTTP_CODE)${NC}\n"
     cat /tmp/env_response.json 2>/dev/null || true

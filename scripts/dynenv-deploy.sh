@@ -10,7 +10,7 @@ printf "${GREEN}Monk Capsules - Deploy${NC}\n"
 
 # Validate required env vars
 # MONKCODE and MONK_SERVICE_TOKEN are set by the workflow job before invoking this script
-for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD; do
+for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD ENVIRONMENT_NAME; do
     eval val=\$$var
     if [ -z "$val" ]; then
         printf "${RED}Error: $var is required${NC}\n"
@@ -19,7 +19,7 @@ for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD; do
 done
 
 MONK_TAG="${BRANCH_TAG:-default}"
-MONK_WORKLOAD="${MONK_WORKLOAD:-snake-game/prod}"
+MONK_WORKLOAD="${MONK_WORKLOAD:-snake-game/snake-game-stack}"
 
 # Configure Monk CLI for non-interactive CI usage
 export MONK_SOCKET="monkcode://$MONKCODE"
@@ -36,7 +36,7 @@ printf "${GREEN}Loading MANIFEST...${NC}\n"
 monk load MANIFEST
 
 printf "${GREEN}Deploying workload $MONK_WORKLOAD to tag $MONK_TAG...${NC}\n"
-monk update -t "$MONK_TAG" "$MONK_WORKLOAD"
+monk update -t "$MONK_TAG" -s environment="$ENVIRONMENT_NAME" "$MONK_WORKLOAD"
 
 printf "${GREEN}Checking deployment status...${NC}\n"
 monk ps

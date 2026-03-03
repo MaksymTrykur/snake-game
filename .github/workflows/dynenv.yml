@@ -2,9 +2,9 @@ name: Monk Capsules
 
 'on':
   push:
-    branches-ignore: [ "main", "master", "add-monk-envs" ]
+    branches-ignore: [ "main", "master", "add-capsule" ]
   pull_request:
-    branches: [ "main", "master", "add-monk-envs" ]
+    branches: [ "main", "master", "add-capsule" ]
     types: [closed]
   workflow_dispatch:
     inputs:
@@ -110,6 +110,9 @@ jobs:
         env:
           CLUSTER_NAME: ${{ needs.resolve-context.outputs.cluster_name }}
           ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
+          BRANCH_NAME: ${{ needs.resolve-context.outputs.branch_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_ENVIRONMENT: capsule-${{ needs.resolve-context.outputs.environment_name }}
           MONK_CLI_TOKEN: ${{ secrets.MONK_CLI_TOKEN }}
           MONK_SUBSCRIPTION_TOKEN: ${{ secrets.MONK_SUBSCRIPTION_TOKEN }}
           MONK_SUBSCRIPTION_API_BASE: ${{ secrets.MONK_SUBSCRIPTION_API_BASE }}
@@ -121,12 +124,12 @@ jobs:
           CLOUD_INSTANCE_COUNT: ${{ secrets.CLOUD_INSTANCE_COUNT }}
           BRANCH_TAG: ${{ needs.resolve-context.outputs.branch_tag }}
           DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
-          mongodb-root-password: ${{ secrets.mongodb-root-password }}
+          DEFAULT_VERCEL_TOKEN: ${{ secrets.DEFAULT_VERCEL_TOKEN }}
       - name: Create pull request for branch lifecycle
         if: ${{ success() }}
         run: |
           BRANCH="${{ needs.resolve-context.outputs.branch_name }}"
-          BASE="add-monk-envs"
+          BASE="add-capsule"
           REPO="${{ github.repository }}"
           PR_TITLE="[capsule] $BRANCH"
           PR_BODY="Auto-created by Monk Capsules.\n\nClosing this PR will destroy the Capsule."
@@ -159,6 +162,7 @@ jobs:
       image: monkreleases.azurecr.io/monk-ci:latest
     outputs:
       monkcode: ${{ steps.meta.outputs.monkcode }}
+      monk_cli_token: ${{ steps.meta.outputs.monk_cli_token }}
       registry_address: ${{ steps.meta.outputs.registry_address }}
       registry_username: ${{ steps.meta.outputs.registry_username }}
       registry_password: ${{ steps.meta.outputs.registry_password }}
@@ -193,6 +197,8 @@ jobs:
           echo "Monkcode retrieved successfully"
           echo "::add-mask::$MONKCODE"
           echo "monkcode=$(echo -n "$MONKCODE" | base64 -w0 | base64 -w0)" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::$MONK_CLI_TOKEN"
+          echo "monk_cli_token=$(echo -n "$MONK_CLI_TOKEN" | base64 -w0 | base64 -w0)" >> "$GITHUB_OUTPUT"
 
           # Step 2: Retrieve registry credentials from cluster secrets via monk CLI
           export MONK_SERVICE_TOKEN="$MONK_CLI_TOKEN"
@@ -231,7 +237,6 @@ jobs:
     needs: [resolve-context, fetch-metadata]
     if: ${{ always() && needs.resolve-context.outputs.should_run == 'true' && needs.resolve-context.outputs.action != 'destroy' && needs.fetch-metadata.result == 'success' }}
     runs-on: ubuntu-latest
-    environment: monk-capsules
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -269,12 +274,14 @@ jobs:
     needs: [resolve-context, fetch-metadata, build-images]
     if: ${{ always() && needs.resolve-context.outputs.should_run == 'true' && needs.resolve-context.outputs.action != 'destroy' && needs.fetch-metadata.result == 'success' && needs.build-images.result == 'success' }}
     runs-on: ubuntu-latest
-    environment: monk-capsules
+    environment:
+      name: capsule-${{ needs.resolve-context.outputs.environment_name }}
+      url: ${{ steps.preview_url.outputs.url }}
     container:
       image: monkreleases.azurecr.io/monk-ci:latest
     steps:
       - name: Install dependencies
-        run: apk add --no-cache curl jq
+        run: apk add --no-cache jq
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -283,69 +290,111 @@ jobs:
         run: |
           chmod +x scripts/dynenv-deploy.sh
           chmod +x scripts/parse-manifest.sh
-      - name: Create GitHub Deployment
-        id: create_deployment
-        run: |
-          PAYLOAD=$(printf '{"ref":"%s","environment":"capsule-%s","transient_environment":true,"production_environment":false,"auto_merge":false,"required_contexts":[],"description":"Monk Capsule"}' "$BRANCH_NAME" "$ENVIRONMENT_NAME")
-          RESPONSE=$(curl -sS -X POST \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/deployments" \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "$PAYLOAD")
-          DEPLOY_ID=$(echo "$RESPONSE" | jq -r '.id // empty')
-          if [ -z "$DEPLOY_ID" ] || [ "$DEPLOY_ID" = "null" ]; then
-            echo "::warning::Failed to create GitHub deployment: $(echo "$RESPONSE" | jq -r '.message // empty')"
-            echo "deploy_id=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
-          STATUS_PAYLOAD=$(printf '{"state":"in_progress","description":"Deploying Monk Capsule...","log_url":"https://github.com/%s/actions/runs/%s"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-          curl -sS -X POST \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/deployments/$DEPLOY_ID/statuses" \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "$STATUS_PAYLOAD" > /dev/null
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          BRANCH_NAME: ${{ needs.resolve-context.outputs.branch_name }}
-          ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
       - name: Deploy Monk Capsule
         id: deploy
         run: |
           export MONKCODE=$(echo "$MONKCODE_B64" | base64 -di | base64 -di)
           echo "::add-mask::$MONKCODE"
+          export MONK_SERVICE_TOKEN=$(echo "$MONK_CLI_TOKEN_B64" | base64 -di | base64 -di)
+          echo "::add-mask::$MONK_SERVICE_TOKEN"
           ./scripts/dynenv-deploy.sh
         env:
           MONKCODE_B64: ${{ needs.fetch-metadata.outputs.monkcode }}
-          MONK_SERVICE_TOKEN: ${{ secrets.MONK_CLI_TOKEN }}
+          MONK_CLI_TOKEN_B64: ${{ needs.fetch-metadata.outputs.monk_cli_token }}
           BRANCH_TAG: ${{ needs.resolve-context.outputs.branch_tag }}
-          MONK_WORKLOAD: "snake-game/prod"
-      - name: Set deployment status (success)
-        if: ${{ success() && steps.create_deployment.outputs.deploy_id != '' }}
+          MONK_WORKLOAD: "snake-game/snake-game-stack"
+          ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
+      - name: Get preview URL
+        id: preview_url
         continue-on-error: true
         run: |
-          PAYLOAD=$(printf '{"state":"success","description":"Monk Capsule deployed","log_url":"https://github.com/%s/actions/runs/%s"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-          curl -sS -X POST \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/deployments/$DEPLOY_ID/statuses" \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "$PAYLOAD" > /dev/null
+          export MONKCODE=$(echo "$MONKCODE_B64" | base64 -di | base64 -di)
+          echo "::add-mask::$MONKCODE"
+          export MONK_SERVICE_TOKEN=$(echo "$MONK_CLI_TOKEN_B64" | base64 -di | base64 -di)
+          echo "::add-mask::$MONK_SERVICE_TOKEN"
+          export MONK_SOCKET="monkcode://$MONKCODE"
+          export MONK_CLI_NO_FANCY=true
+          export MONK_CLI_NO_COLOR=true
+          DOMAIN=$(monk cluster peers --json | jq -r '
+            [.[] | select(.domain != "" and (.domain | endswith(".monk.local") | not) and (.tags == null or ((.tags | index("system")) == null)))][0].domain // empty
+          ')
+          if [ -z "$DOMAIN" ]; then
+            DOMAIN=$(monk cluster peers --json | jq -r '
+              [.[] | select(.domain != "" and (.domain | endswith(".monk.local") | not))][0].domain // empty
+            ')
+          fi
+          if [ -n "$DOMAIN" ]; then
+            echo "url=https://$DOMAIN" >> "$GITHUB_OUTPUT"
+            echo "Preview URL: https://$DOMAIN"
+          else
+            echo "::warning::Could not determine preview URL from cluster peers"
+          fi
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          DEPLOY_ID: ${{ steps.create_deployment.outputs.deploy_id }}
-      - name: Set deployment status (failure)
-        if: ${{ failure() && steps.create_deployment.outputs.deploy_id != '' }}
-        continue-on-error: true
+          MONKCODE_B64: ${{ needs.fetch-metadata.outputs.monkcode }}
+          MONK_CLI_TOKEN_B64: ${{ needs.fetch-metadata.outputs.monk_cli_token }}
+      - name: Update capsule metadata (success)
+        if: ${{ success() }}
         run: |
-          PAYLOAD=$(printf '{"state":"failure","description":"Monk Capsule deployment failed","log_url":"https://github.com/%s/actions/runs/%s"}' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
-          curl -sS -X POST \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/deployments/$DEPLOY_ID/statuses" \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "$PAYLOAD" > /dev/null
+          NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          PREVIEW_URL="${{ steps.preview_url.outputs.url }}"
+          PAYLOAD=$(jq -n             --arg branch "${{ needs.resolve-context.outputs.branch_name }}"             --arg repository "${{ github.repository }}"             --arg orgSlug "$MONK_ORG_SLUG"             --arg projectSlug "$MONK_PROJECT_SLUG"             --arg clusterName "${{ needs.resolve-context.outputs.cluster_name }}"             --arg githubEnvironment "capsule-${{ needs.resolve-context.outputs.environment_name }}"             --arg status "active"             --arg previewUrl "$PREVIEW_URL"             --arg now "$NOW_UTC"             '{
+              settings: {
+                capsule: {
+                  source: "dynenv",
+                  branch: $branch,
+                  repository: $repository,
+                  orgSlug: $orgSlug,
+                  projectSlug: $projectSlug,
+                  clusterName: $clusterName,
+                  githubEnvironment: $githubEnvironment,
+                  status: $status,
+                  previewUrl: $previewUrl,
+                  lastDeployAt: $now,
+                  updatedAt: $now
+                }
+              }
+            }')
+          HTTP_CODE=$(curl -s -o /tmp/capsule_patch_success.json -w "%{http_code}"             -X PATCH "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME"             -H "Authorization: Bearer $MONK_SUBSCRIPTION_TOKEN"             -H "Content-Type: application/json"             -d "$PAYLOAD")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::warning::Failed to update capsule metadata after deploy (HTTP $HTTP_CODE)"
+            cat /tmp/capsule_patch_success.json 2>/dev/null || true
+          fi
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          DEPLOY_ID: ${{ steps.create_deployment.outputs.deploy_id }}
+          MONK_SUBSCRIPTION_TOKEN: ${{ secrets.MONK_SUBSCRIPTION_TOKEN }}
+          MONK_SUBSCRIPTION_API_BASE: ${{ secrets.MONK_SUBSCRIPTION_API_BASE }}
+          MONK_ORG_SLUG: ${{ secrets.MONK_ORG_SLUG }}
+          MONK_PROJECT_SLUG: ${{ secrets.MONK_PROJECT_SLUG }}
+          ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
+      - name: Update capsule metadata (failure)
+        if: ${{ always() && steps.deploy.outcome == 'failure' }}
+        run: |
+          NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          PAYLOAD=$(jq -n             --arg branch "${{ needs.resolve-context.outputs.branch_name }}"             --arg repository "${{ github.repository }}"             --arg orgSlug "$MONK_ORG_SLUG"             --arg projectSlug "$MONK_PROJECT_SLUG"             --arg clusterName "${{ needs.resolve-context.outputs.cluster_name }}"             --arg githubEnvironment "capsule-${{ needs.resolve-context.outputs.environment_name }}"             --arg status "failed"             --arg now "$NOW_UTC"             '{
+              settings: {
+                capsule: {
+                  source: "dynenv",
+                  branch: $branch,
+                  repository: $repository,
+                  orgSlug: $orgSlug,
+                  projectSlug: $projectSlug,
+                  clusterName: $clusterName,
+                  githubEnvironment: $githubEnvironment,
+                  status: $status,
+                  updatedAt: $now
+                }
+              }
+            }')
+          HTTP_CODE=$(curl -s -o /tmp/capsule_patch_failed.json -w "%{http_code}"             -X PATCH "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME"             -H "Authorization: Bearer $MONK_SUBSCRIPTION_TOKEN"             -H "Content-Type: application/json"             -d "$PAYLOAD")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::warning::Failed to mark capsule as failed (HTTP $HTTP_CODE)"
+            cat /tmp/capsule_patch_failed.json 2>/dev/null || true
+          fi
+        env:
+          MONK_SUBSCRIPTION_TOKEN: ${{ secrets.MONK_SUBSCRIPTION_TOKEN }}
+          MONK_SUBSCRIPTION_API_BASE: ${{ secrets.MONK_SUBSCRIPTION_API_BASE }}
+          MONK_ORG_SLUG: ${{ secrets.MONK_ORG_SLUG }}
+          MONK_PROJECT_SLUG: ${{ secrets.MONK_PROJECT_SLUG }}
+          ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
 
   destroy:
     needs: resolve-context
@@ -396,7 +445,12 @@ jobs:
               -H "Authorization: token $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github+json" > /dev/null 2>&1 || true
           done
-          echo "GitHub deployments deactivated for $ENV_NAME"
+          echo "Cleaning up GitHub environment $ENV_NAME..."
+          curl -sS -X DELETE \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/environments/$ENV_NAME" \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" > /dev/null 2>&1 || true
+          echo "GitHub environment $ENV_NAME cleaned up"
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}

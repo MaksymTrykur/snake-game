@@ -1,62 +1,292 @@
 namespace: snake-game
 
-mongodb:
-  defines: runnable
-  inherits: mongodb/mongodb
-  variables:
-    mongo-init-database:
-      type: string
-      value: snake-game
-      env: MONGO_INITDB_DATABASE
-    mongo-init-username:
-      type: string
-      value: snake-game
-      env: MONGO_INITDB_ROOT_USERNAME
-    mongo-init-password:
-      type: string
-      value: <- secret("mongodb-root-password")
-      env: MONGO_INITDB_ROOT_PASSWORD
-  permitted-secrets:
-    mongodb-root-password: true
+mongo:
+  defines: digitalocean-database/database
+  engine: mongodb
+  region: fra1
+  name: monk-snake-game-mongo
+  size: db-s-1vcpu-2gb
+  num_nodes: 1
+  checks:
+    # DigitalOcean managed MongoDB clusters can take a long time to provision.
+    # Increase readiness window to avoid exhausting attempts while status is still "creating".
+    readiness:
+      attempts: 120
+      initialDelay: 10
+      period: 20
+  services:
+    default:
+      protocol: custom
 
 app:
   defines: runnable
   containers:
-    app:
+    main:
       image: snake-game:latest
   services:
     http:
-      container: app
+      container: main
       port: 3001
       protocol: tcp
       ingress-routes:
-        main:
+        web:
           path-prefix: /
   connections:
-    mongodb:
-      target: snake-game/mongodb
-      service: mongodb
+    mongo:
+      target: snake-game/mongo
+      service: default
+  depends:
+    wait-for:
+      # Ensure the API doesn't start until the managed DB is fully ready (status=online and connection info available).
+      entities:
+        - snake-game/mongo
+      runnables:
+        - snake-game/mongo
+      timeout: 1800
+  variables:
+    db-conn:
+      type: string
+      value: <- connection-target("mongo") entity-state get-member("connection_uri")
+      env: DB_CONN
+    mongodb-uri:
+      type: string
+      value: <- connection-target("mongo") entity-state get-member("connection_uri")
+      env: MONGODB_URI
+
+vercel-project:
+  defines: vercel/project
+  name: monk-snake-game-frontend-a1b2
+  secret_ref: default-vercel-token
+  permitted-secrets:
+    default-vercel-token: true
+  services:
+    data:
+      protocol: custom
+
+vercel-static-deploy:
+  defines: runnable
+  inherits: vercel/deploy
+  permitted-secrets:
+    default-vercel-token: true
+  containers:
+    deploy:
+      paths:
+        - blobs://frontend:/mnt/frontend
+  services:
+    status:
+      # Lightweight service so other components can "connect" to this runnable for depends wiring.
+      # Note: runnable services cannot use protocol: custom, so we expose an arbitrary TCP port.
+      container: deploy
+      port: 1
+      protocol: tcp
+  connections:
+    project:
+      target: snake-game/vercel-project
+      service: data
+    app:
+      target: snake-game/app
+      service: http
+  depends:
+    wait-for:
+      entities:
+        - snake-game/vercel-project
+      runnables:
+        - snake-game/app
+      timeout: 300
+  variables:
+    project:
+      type: string
+      value: <- connection-target("project") entity-state get-member("name")
+      env: VERCEL_PROJECT
+    deploy-dir:
+      type: string
+      value: /home/node/app
+      env: DEPLOY_DIR
+    backend-origin:
+      type: string
+      value: <- "https://" connection-domain-name("app") concat-all
+      env: BACKEND_ORIGIN
+    pre-deploy:
+      type: string
+      value: |
+        set -euo pipefail
+        mkdir -p "$DEPLOY_DIR"
+        cp -R /mnt/frontend/. "$DEPLOY_DIR"/
+
+        cat > "$DEPLOY_DIR/vercel.json" <<EOF
+        {
+          "rewrites": [
+            { "source": "/highscore", "destination": "${BACKEND_ORIGIN}/highscore" },
+            { "source": "/highscore/:path*", "destination": "${BACKEND_ORIGIN}/highscore/:path*" }
+          ]
+        }
+        EOF
+
+vercel-url-ready:
+  defines: runnable
+  # Wait for the *latest* Vercel deployment (preview or production) to become READY.
+  # This replaces the previous wait-for-action(get-production-urls) which can fail when
+  # production URLs are not available yet.
+  permitted-secrets:
+    default-vercel-token: true
+  containers:
+    main:
+      image: monkimages.azurecr.io/example-vercel-build:latest
+      restart: "no"
+      bash: /tmp/wait.sh
+  services:
+    status:
+      # Lightweight service so other components can "connect" to this runnable for depends wiring.
+      container: main
+      port: 1
+      protocol: tcp
+  connections:
+    vercel-project:
+      target: snake-game/vercel-project
+      service: data
+    deploy:
+      target: snake-game/vercel-static-deploy
+      service: status
+  depends:
+    wait-for:
+      entities:
+        - snake-game/vercel-project
+      runnables:
+        - snake-game/vercel-static-deploy
+      timeout: 600
+  variables:
+    vercel-token:
+      type: string
+      value: <- secret("default-vercel-token")
+      env: VERCEL_TOKEN
+    vercel-project-id:
+      type: string
+      value: <- connection-target("vercel-project") entity-state get-member("id")
+      env: VERCEL_PROJECT_ID
+    # If set to true, attempt to promote/alias the latest deployment to a production alias.
+    # This is optional and best-effort (will not fail the stack on alias issues).
+    promote-to-production:
+      type: bool
+      value: false
+      env: PROMOTE_TO_PRODUCTION
+    # Optional hostname to alias the deployment to (e.g. "snake.example.com").
+    # Requires that the domain is configured in Vercel for the project.
+    production-alias:
+      type: string
+      value: ""
+      env: PRODUCTION_ALIAS
+    wait-timeout-seconds:
+      type: int
+      value: 600
+      env: WAIT_TIMEOUT_SECONDS
+    poll-interval-seconds:
+      type: int
+      value: 5
+      env: POLL_INTERVAL_SECONDS
+  files:
+    wait:
+      container: main
+      path: /tmp/wait.sh
+      mode: 493
+      contents: |
+        #!/bin/sh
+        set -eu
+
+        api="https://api.vercel.com"
+        start="$(date +%s)"
+
+        echo "Waiting for latest Vercel deployment to become READY for project $VERCEL_PROJECT_ID ..."
+
+        while :; do
+          now="$(date +%s)"
+          elapsed="$((now - start))"
+          if [ "$elapsed" -ge "${WAIT_TIMEOUT_SECONDS:-600}" ]; then
+            echo "Timed out after ${WAIT_TIMEOUT_SECONDS:-600}s waiting for a READY deployment."
+            echo "Continuing without failing the stack; endpoints may temporarily point to an older URL."
+            exit 0
+          fi
+
+          # Get project details (includes latestDeployment info)
+          project_json="$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "$api/v9/projects/$VERCEL_PROJECT_ID" 2>/dev/null || true)"
+
+          # Extract latest deployment id and url.
+          # This is a minimal parser to avoid requiring jq in the image.
+          dep_id="$(echo "$project_json" | tr -d '\n' | sed -n 's/.*"latestDeployment":{"id":"\([^"]*\)".*/\1/p')"
+          dep_url="$(echo "$project_json" | tr -d '\n' | sed -n 's/.*"latestDeployment":{"id":"[^"]*","url":"\([^"]*\)".*/\1/p')"
+
+          if [ -n "$dep_id" ]; then
+            dep_json="$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "$api/v13/deployments/$dep_id" 2>/dev/null || true)"
+            dep_state="$(echo "$dep_json" | tr -d '\n' | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+            [ -n "$dep_url" ] || dep_url="$(echo "$dep_json" | tr -d '\n' | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
+
+            echo "Latest deployment: id=$dep_id url=$dep_url state=$dep_state"
+
+            # Vercel uses "READY" (and sometimes "READY" in uppercase) for successful deployments.
+            if [ "$dep_state" = "READY" ] || [ "$dep_state" = "ready" ]; then
+              echo "Deployment is READY."
+
+              # Optional: alias to production/custom hostname (best-effort).
+              if [ "${PROMOTE_TO_PRODUCTION:-false}" = "true" ] && [ -n "${PRODUCTION_ALIAS:-}" ]; then
+                echo "Attempting to alias deployment to ${PRODUCTION_ALIAS} (best-effort)..."
+                vercel alias set "https://${dep_url}" "${PRODUCTION_ALIAS}" --yes -t "$VERCEL_TOKEN" >/dev/null 2>&1 || \
+                  echo "Alias step failed (continuing). Ensure the domain is configured in Vercel and token has access."
+              fi
+
+              exit 0
+            fi
+          else
+            echo "No latestDeployment info available yet (project may still be initializing)."
+          fi
+
+          sleep "${POLL_INTERVAL_SECONDS:-5}"
+        done
+
+endpoints:
+  defines: monkec/endpoints
+  endpoints:
+    frontend:
+      description: Snake Game web UI (Vercel)
+      # Use the resolved latest deployment URL, which works for both preview and production.
+      # (Production URLs may not be immediately available right after a deployment.)
+      url: <- "https://" connection-target("vercel-project") entity-state get-member("latest_deployment") get-member("url") concat-all
+    backend:
+      description: Snake Game backend/API (ingress)
+      url: <- "https://" connection-domain-name("app") "/" concat-all
+  entrypoint: frontend
+  connections:
+    app:
+      target: snake-game/app
+      service: http
+    vercel-project:
+      target: snake-game/vercel-project
+      service: data
+    vercel-deploy:
+      target: snake-game/vercel-static-deploy
+      service: status
+    vercel-url-ready:
+      target: snake-game/vercel-url-ready
+      service: status
   depends:
     wait-for:
       runnables:
-        - snake-game/mongodb
-      timeout: 120
-  scale:
-    value: 1
-  variables:
-    node-env:
-      type: string
-      value: production
-      env: NODE_ENV
-    db-conn:
-      type: string
-      value: <- "mongodb://snake-game:" secret("mongodb-root-password") "@" connection-hostname("mongodb") ":" connection-port("mongodb") "/snake-game?authSource=admin" concat-all
-      env: DB_CONN
-  permitted-secrets:
-    mongodb-root-password: true
+        - snake-game/app
+        - snake-game/vercel-static-deploy
+        - snake-game/vercel-url-ready
+      entities:
+        - snake-game/vercel-project
+      timeout: 300
+  services:
+    data:
+      protocol: custom
 
-prod:
+snake-game-stack:
   defines: group
   members:
-    - snake-game/mongodb
+    - snake-game/mongo
     - snake-game/app
+    - snake-game/vercel-project
+    - snake-game/vercel-static-deploy
+    - snake-game/vercel-url-ready
+    - snake-game/endpoints
