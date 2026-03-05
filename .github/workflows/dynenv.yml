@@ -243,6 +243,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
       - name: Set up Docker Buildx (fallback)
+        if: ${{ env.ACT != 'true' }}
         uses: docker/setup-buildx-action@v3
       - name: Make scripts executable
         run: |
@@ -277,7 +278,7 @@ jobs:
       image: monkreleases.azurecr.io/monk-ci:latest
     steps:
       - name: Install dependencies
-        run: apk add --no-cache jq nodejs
+        run: apk add --no-cache curl jq nodejs
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -311,23 +312,63 @@ jobs:
           export MONK_SOCKET="monkcode://$MONKCODE"
           export MONK_CLI_NO_FANCY=true
           export MONK_CLI_NO_COLOR=true
-          DOMAIN=$(monk cluster peers --json | jq -r '
-            [.[] | select(.domain != "" and (.domain | endswith(".monk.local") | not) and (.tags == null or ((.tags | index("system")) == null)))][0].domain // empty
-          ')
-          if [ -z "$DOMAIN" ]; then
-            DOMAIN=$(monk cluster peers --json | jq -r '
-              [.[] | select(.domain != "" and (.domain | endswith(".monk.local") | not))][0].domain // empty
-            ')
+          PREVIEW_URL=""
+
+          # Prefer explicit workload namespace endpoints over peer node domain inference.
+          if [ -n "$MONK_WORKLOAD" ] && echo "$MONK_WORKLOAD" | grep -q '/'; then
+            WORKLOAD_NAMESPACE="${MONK_WORKLOAD%/*}"
+            ENDPOINT_ENTITY="${WORKLOAD_NAMESPACE}/endpoints"
+            if ENDPOINTS_JSON=$(monk --json --no-events describe "$ENDPOINT_ENTITY" 2>/tmp/endpoints_describe_err.log); then
+              PREVIEW_URL=$(echo "$ENDPOINTS_JSON" | jq -r '
+                [
+                  .Entities[]?.ResultState?.values?.entrypoint_url?,
+                  .data?.entrypoint_url?.v?,
+                  .entrypoint_url?
+                ]
+                | map(select(type == "string" and length > 0))
+                | map(select(. != "nil" and . != "null" and . != "https://nil" and . != "http://nil"))
+                | .[0] // empty
+              ')
+              if [ -n "$PREVIEW_URL" ]; then
+                case "$PREVIEW_URL" in
+                http://*|https://*)
+                  PREVIEW_URL="$PREVIEW_URL"
+                  ;;
+                *)
+                  PREVIEW_URL="https://$PREVIEW_URL"
+                  ;;
+                esac
+              fi
+            else
+              echo "::warning::Could not describe $ENDPOINT_ENTITY, falling back to peer domain"
+            fi
           fi
-          if [ -n "$DOMAIN" ]; then
-            echo "url=https://$DOMAIN" >> "$GITHUB_OUTPUT"
-            echo "Preview URL: https://$DOMAIN"
+
+          # Fallback for clusters where endpoint resource is not populated yet.
+          if [ -z "$PREVIEW_URL" ]; then
+            DOMAIN=$(monk cluster peers --json | jq -r '
+              [.[] | select(.domain != "" and (.domain | endswith(".monk.local") | not) and (.tags == null or ((.tags | index("system")) == null)))][0].domain // empty
+            ')
+            if [ -z "$DOMAIN" ]; then
+              DOMAIN=$(monk cluster peers --json | jq -r '
+                [.[] | select(.domain != "" and (.domain | endswith(".monk.local") | not))][0].domain // empty
+              ')
+            fi
+            if [ -n "$DOMAIN" ]; then
+              PREVIEW_URL="https://$DOMAIN"
+            fi
+          fi
+
+          if [ -n "$PREVIEW_URL" ]; then
+            echo "url=$PREVIEW_URL" >> "$GITHUB_OUTPUT"
+            echo "Preview URL: $PREVIEW_URL"
           else
-            echo "::warning::Could not determine preview URL from cluster peers"
+            echo "::warning::Could not determine preview URL from endpoints or peers"
           fi
         env:
           MONKCODE_B64: ${{ needs.fetch-metadata.outputs.monkcode }}
           MONK_CLI_TOKEN_B64: ${{ needs.fetch-metadata.outputs.monk_cli_token }}
+          MONK_WORKLOAD: "snake-game/snake-game-stack"
       - name: Update capsule metadata (success)
         if: ${{ success() }}
         run: |

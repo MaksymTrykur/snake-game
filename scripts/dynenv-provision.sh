@@ -1,5 +1,5 @@
 #!/bin/sh
-set -xe
+set -e
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -25,13 +25,6 @@ export MONK_SERVICE_TOKEN="$MONK_CLI_TOKEN"
 export MONK_CLI_NO_FANCY=true
 export MONK_CLI_NO_COLOR=true
 export MONK_NO_INTERACTIVE=true
-
-# Start the Monk daemon in background (not running by default in CI container)
-printf "${GREEN}Starting Monk daemon...${NC}\n"
-monkd > /tmp/monkd.log 2>&1 &
-printf "${GREEN}Waiting for daemon to initialize...${NC}\n"
-sleep 20
-printf "${GREEN}Daemon ready.${NC}\n"
 
 CREATED_CLUSTER=false
 
@@ -83,6 +76,18 @@ else
     exit 1
 fi
 
+# Fast path: if environment already has a linked, reachable cluster with registry secret,
+# skip expensive provisioning and continue workflow with existing resources.
+if [ "$ENV_EXISTS" = "true" ] && [ "$USE_EXISTING_CLUSTER" = "true" ]; then
+    printf "${GREEN}Checking whether existing capsule cluster is already provisioned...${NC}\n"
+    export MONK_SOCKET="monkcode://$MONKCODE"
+    if monk --json secrets get -r system/registry registry-auth >/tmp/existing_registry_secret_check.json 2>&1; then
+        printf "${GREEN}Existing capsule is already provisioned. Skipping provisioning step.${NC}\n"
+        exit 0
+    fi
+    printf "${YELLOW}Existing capsule cluster is missing registry setup or unreachable. Continuing reconciliation.${NC}\n"
+fi
+
 if [ "$USE_EXISTING_CLUSTER" != "true" ] && [ "$ENV_EXISTS" != "true" ]; then
     printf "${GREEN}Checking for an existing cluster record named $CLUSTER_NAME...${NC}\n"
     CLUSTERS_HTTP_CODE=$(curl -s -o /tmp/existing_clusters_response.json -w "%{http_code}" \
@@ -103,18 +108,28 @@ if [ "$USE_EXISTING_CLUSTER" != "true" ] && [ "$ENV_EXISTS" != "true" ]; then
 fi
 
 if [ "$USE_EXISTING_CLUSTER" = "true" ]; then
-    printf "${GREEN}Connecting to existing cluster...${NC}\n"
-    if monk cluster join --force --purge=false --monkcode "$MONKCODE" --local-name "provision-runner-$$"; then
+    printf "${GREEN}Connecting to existing cluster via MONK_SOCKET...${NC}\n"
+    export MONK_SOCKET="monkcode://$MONKCODE"
+    if monk --json cluster info >/tmp/existing_cluster_info.json 2>&1; then
         printf "${GREEN}Connected to existing cluster.${NC}\n"
     else
-        printf "${YELLOW}Warning: Failed to join existing cluster. Falling back to fresh provisioning.${NC}\n"
+        printf "${YELLOW}Warning: Failed to reach existing cluster via MONK_SOCKET. Falling back to fresh provisioning.${NC}\n"
         USE_EXISTING_CLUSTER=false
         CLUSTER_ID=""
         MONKCODE=""
+        unset MONK_SOCKET
     fi
 fi
 
 if [ "$USE_EXISTING_CLUSTER" != "true" ]; then
+    unset MONK_SOCKET
+    # Start the Monk daemon in background (not running by default in CI container)
+    printf "${GREEN}Starting Monk daemon...${NC}\n"
+    monkd > /tmp/monkd.log 2>&1 &
+    printf "${GREEN}Waiting for daemon to initialize...${NC}\n"
+    sleep 20
+    printf "${GREEN}Daemon ready.${NC}\n"
+
     # A.2 Create new cluster
     printf "${GREEN}Creating new cluster: $CLUSTER_NAME...${NC}\n"
     monk cluster new -n "$CLUSTER_NAME"
@@ -419,7 +434,7 @@ CAPSULE_SETTINGS_PAYLOAD=$(jq -n \
     --arg branch "$BRANCH_NAME" \
     --arg repository "$GITHUB_REPOSITORY" \
     --arg githubEnvironment "$GITHUB_ENVIRONMENT" \
-    --arg status "provisioning" \
+    --arg status "provisioned" \
     --arg now "$NOW_UTC" \
     '{
       settings: {
@@ -471,7 +486,7 @@ else
         --arg branch "$BRANCH_NAME" \
         --arg repository "$GITHUB_REPOSITORY" \
         --arg githubEnvironment "$GITHUB_ENVIRONMENT" \
-        --arg status "provisioning" \
+        --arg status "provisioned" \
         --arg now "$NOW_UTC" \
         '{
           name: $name,
