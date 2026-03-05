@@ -1,5 +1,5 @@
 #!/bin/sh
-set -e
+set -xe
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,86 +33,158 @@ printf "${GREEN}Waiting for daemon to initialize...${NC}\n"
 sleep 20
 printf "${GREEN}Daemon ready.${NC}\n"
 
+CREATED_CLUSTER=false
+
 cleanup_on_failure() {
-    printf "${YELLOW}Provisioning failed, attempting cleanup...${NC}\n"
-    monk cluster nuke --force --remove-volumes --remove-snapshots 2>/dev/null || true
-    printf "${YELLOW}Cleanup attempted.${NC}\n"
+    if [ "$CREATED_CLUSTER" = "true" ]; then
+        printf "${YELLOW}Provisioning failed, attempting cleanup of newly created cluster...${NC}\n"
+        monk cluster nuke --force --remove-volumes --remove-snapshots 2>/dev/null || true
+        printf "${YELLOW}Cleanup attempted.${NC}\n"
+    else
+        printf "${YELLOW}Provisioning failed. Skipping destructive cleanup because no new cluster was created.${NC}\n"
+    fi
 }
 trap cleanup_on_failure ERR
 
 # ============================================================================
-# I.A -- Create and grow cluster
+# I.A -- Reconcile environment and cluster (idempotent)
 # ============================================================================
+BRANCH_NAME="${BRANCH_NAME:-$ENVIRONMENT_NAME}"
+GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}"
+GITHUB_ENVIRONMENT="${GITHUB_ENVIRONMENT:-capsule-$ENVIRONMENT_NAME}"
+NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+ENV_PATH="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME"
 
-# A.2 Create new cluster
-printf "${GREEN}Creating new cluster: $CLUSTER_NAME...${NC}\n"
-monk cluster new -n "$CLUSTER_NAME"
+ENV_EXISTS=false
+USE_EXISTING_CLUSTER=false
+ENV_CLUSTER_ID=""
+CLUSTER_ID=""
+MONKCODE=""
 
-# A.3 Inject cloud provider credentials
-printf "${GREEN}Adding cloud provider: $CLOUD_PROVIDER...${NC}\n"
+printf "${GREEN}Checking if environment exists: $ENVIRONMENT_NAME...${NC}\n"
+ENV_HTTP_CODE=$(curl -s -o /tmp/existing_env_response.json -w "%{http_code}" "$ENV_PATH" \
+    -H "$AUTH_HEADER")
+if [ "$ENV_HTTP_CODE" = "200" ]; then
+    ENV_EXISTS=true
+    ENV_CLUSTER_ID=$(jq -r '.cluster.clusterId // .clusterExternalId // empty' /tmp/existing_env_response.json)
+    MONKCODE=$(jq -r '.cluster.monkcode // empty' /tmp/existing_env_response.json)
+    if [ -n "$ENV_CLUSTER_ID" ] && [ -n "$MONKCODE" ]; then
+        CLUSTER_ID="$ENV_CLUSTER_ID"
+        USE_EXISTING_CLUSTER=true
+        printf "${GREEN}Found existing environment linked to cluster $CLUSTER_ID. Reusing.${NC}\n"
+    else
+        printf "${YELLOW}Environment exists but has no usable cluster link. Will provision and relink.${NC}\n"
+    fi
+elif [ "$ENV_HTTP_CODE" = "404" ]; then
+    printf "${GREEN}Environment does not exist yet. Will create it.${NC}\n"
+else
+    printf "${RED}Error: Failed to query environment (HTTP $ENV_HTTP_CODE)${NC}\n"
+    cat /tmp/existing_env_response.json 2>/dev/null || true
+    exit 1
+fi
+
+if [ "$USE_EXISTING_CLUSTER" != "true" ] && [ "$ENV_EXISTS" != "true" ]; then
+    printf "${GREEN}Checking for an existing cluster record named $CLUSTER_NAME...${NC}\n"
+    CLUSTERS_HTTP_CODE=$(curl -s -o /tmp/existing_clusters_response.json -w "%{http_code}" \
+        "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/clusters" \
+        -H "$AUTH_HEADER")
+    if [ "$CLUSTERS_HTTP_CODE" -ge 200 ] && [ "$CLUSTERS_HTTP_CODE" -lt 300 ]; then
+        CANDIDATE_CLUSTER_ID=$(jq -r --arg name "$CLUSTER_NAME" '[.[] | select((.name // "") == $name)][0].clusterId // empty' /tmp/existing_clusters_response.json)
+        CANDIDATE_MONKCODE=$(jq -r --arg name "$CLUSTER_NAME" '[.[] | select((.name // "") == $name)][0].monkcode // empty' /tmp/existing_clusters_response.json)
+        if [ -n "$CANDIDATE_CLUSTER_ID" ] && [ -n "$CANDIDATE_MONKCODE" ]; then
+            CLUSTER_ID="$CANDIDATE_CLUSTER_ID"
+            MONKCODE="$CANDIDATE_MONKCODE"
+            USE_EXISTING_CLUSTER=true
+            printf "${GREEN}Found existing cluster record $CLUSTER_ID by name. Reusing.${NC}\n"
+        fi
+    else
+        printf "${YELLOW}Warning: Could not list org clusters (HTTP $CLUSTERS_HTTP_CODE). Continuing with fresh provisioning.${NC}\n"
+    fi
+fi
+
+if [ "$USE_EXISTING_CLUSTER" = "true" ]; then
+    printf "${GREEN}Connecting to existing cluster...${NC}\n"
+    if monk cluster join --force --purge=false --monkcode "$MONKCODE" --local-name "provision-runner-$$"; then
+        printf "${GREEN}Connected to existing cluster.${NC}\n"
+    else
+        printf "${YELLOW}Warning: Failed to join existing cluster. Falling back to fresh provisioning.${NC}\n"
+        USE_EXISTING_CLUSTER=false
+        CLUSTER_ID=""
+        MONKCODE=""
+    fi
+fi
+
+if [ "$USE_EXISTING_CLUSTER" != "true" ]; then
+    # A.2 Create new cluster
+    printf "${GREEN}Creating new cluster: $CLUSTER_NAME...${NC}\n"
+    monk cluster new -n "$CLUSTER_NAME"
+    CREATED_CLUSTER=true
+
+    # A.3 Inject cloud provider credentials
+    printf "${GREEN}Adding cloud provider: $CLOUD_PROVIDER...${NC}\n"
 monk cluster provider add --provider digitalocean --digitalocean-token "$DO_API_TOKEN"
 
-# A.4 Grow cluster (provision instances)
-printf "${GREEN}Growing cluster ($CLOUD_INSTANCE_COUNT x $CLOUD_INSTANCE_TYPE in $CLOUD_REGION)...${NC}\n"
-monk cluster grow \
-    --name "$CLUSTER_NAME" \
-    --tag "$BRANCH_TAG" \
-    --provider "$CLOUD_PROVIDER" \
-    --region "$CLOUD_REGION" \
-    --instance-type "$CLOUD_INSTANCE_TYPE" \
-    --num-instances "$CLOUD_INSTANCE_COUNT" \
-    --generate-domain \
-    --generate-ssl-cert
+    # A.4 Grow cluster (provision instances)
+    printf "${GREEN}Growing cluster ($CLOUD_INSTANCE_COUNT x $CLOUD_INSTANCE_TYPE in $CLOUD_REGION)...${NC}\n"
+    monk cluster grow \
+        --name "$CLUSTER_NAME" \
+        --tag "$BRANCH_TAG" \
+        --provider "$CLOUD_PROVIDER" \
+        --region "$CLOUD_REGION" \
+        --instance-type "$CLOUD_INSTANCE_TYPE" \
+        --num-instances "$CLOUD_INSTANCE_COUNT" \
+        --generate-domain \
+        --generate-ssl-cert
 
-# A.5 Extract cluster info
-printf "${GREEN}Extracting cluster information...${NC}\n"
-CLUSTER_INFO=$(monk --json cluster info 2>&1 | tail -n 1)
-MONKCODE=$(echo "$CLUSTER_INFO" | jq -r '.data.monkcode')
-CLUSTER_ID=$(echo "$CLUSTER_INFO" | jq -r '.data.id')
+    # A.5 Extract cluster info
+    printf "${GREEN}Extracting cluster information...${NC}\n"
+    CLUSTER_INFO=$(monk --json cluster info 2>&1 | tail -n 1)
+    MONKCODE=$(echo "$CLUSTER_INFO" | jq -r '.data.monkcode')
+    CLUSTER_ID=$(echo "$CLUSTER_INFO" | jq -r '.data.id')
 
-if [ -z "$MONKCODE" ] || [ "$MONKCODE" = "null" ]; then
-    printf "${RED}Error: Failed to extract monkcode from cluster info${NC}\n"
-    exit 1
-fi
-printf "${GREEN}Cluster created. ID: $CLUSTER_ID${NC}\n"
-
-# A.5.1 Enable ingress plugin
-printf "${GREEN}Enabling ingress plugin...${NC}\n"
-monk plugins enable ingress || printf "${YELLOW}Warning: Failed to enable ingress plugin (non-blocking)${NC}\n"
-
-# A.6 Set up per-cluster container registry
-printf "${GREEN}Setting up container registry...${NC}\n"
-
-# A.6.1 Ensure a peer has the "system" tag (registry runs on the system-tagged peer)
-printf "${GREEN}Ensuring system tag on a cluster peer...${NC}\n"
-PEERS_JSON=$(monk --json cluster peers)
-SYSTEM_PEER_ID=$(echo "$PEERS_JSON" | jq -r '[.[] | select(.tags != null and (.tags | contains(["system"])))][0].id // empty')
-if [ -z "$SYSTEM_PEER_ID" ]; then
-    SYSTEM_PEER_ID=$(echo "$PEERS_JSON" | jq -r '[.[] | select(.name != "local")][0].id // empty')
-    if [ -z "$SYSTEM_PEER_ID" ]; then
-        printf "${RED}Error: No suitable peer found for system tag${NC}\n"
+    if [ -z "$MONKCODE" ] || [ "$MONKCODE" = "null" ]; then
+        printf "${RED}Error: Failed to extract monkcode from cluster info${NC}\n"
         exit 1
     fi
-    EXISTING_TAGS=$(echo "$PEERS_JSON" | jq -r --arg id "$SYSTEM_PEER_ID" '[.[] | select(.id == $id)][0].tags // [] | join(",")')
-    if [ -n "$EXISTING_TAGS" ]; then
-        SYSTEM_TAGS="system,$EXISTING_TAGS"
+    printf "${GREEN}Cluster ready. ID: $CLUSTER_ID${NC}\n"
+
+    # A.5.1 Enable ingress plugin
+    printf "${GREEN}Enabling ingress plugin...${NC}\n"
+    monk plugins enable ingress || printf "${YELLOW}Warning: Failed to enable ingress plugin (non-blocking)${NC}\n"
+
+    # A.6 Set up per-cluster container registry
+    printf "${GREEN}Setting up container registry...${NC}\n"
+
+    # A.6.1 Ensure a peer has the "system" tag (registry runs on the system-tagged peer)
+    printf "${GREEN}Ensuring system tag on a cluster peer...${NC}\n"
+    PEERS_JSON=$(monk --json cluster peers)
+    SYSTEM_PEER_ID=$(echo "$PEERS_JSON" | jq -r '[.[] | select(.tags != null and (.tags | contains(["system"])))][0].id // empty')
+    if [ -z "$SYSTEM_PEER_ID" ]; then
+        SYSTEM_PEER_ID=$(echo "$PEERS_JSON" | jq -r '[.[] | select(.name != "local")][0].id // empty')
+        if [ -z "$SYSTEM_PEER_ID" ]; then
+            printf "${RED}Error: No suitable peer found for system tag${NC}\n"
+            exit 1
+        fi
+        EXISTING_TAGS=$(echo "$PEERS_JSON" | jq -r --arg id "$SYSTEM_PEER_ID" '[.[] | select(.id == $id)][0].tags // [] | join(",")')
+        if [ -n "$EXISTING_TAGS" ]; then
+            SYSTEM_TAGS="system,$EXISTING_TAGS"
+        else
+            SYSTEM_TAGS="system"
+        fi
+        monk cluster peer-tags --id "$SYSTEM_PEER_ID" --tag "$SYSTEM_TAGS"
+        printf "${GREEN}Tagged peer $SYSTEM_PEER_ID with system tag.${NC}\n"
     else
-        SYSTEM_TAGS="system"
+        printf "${GREEN}System-tagged peer already exists: $SYSTEM_PEER_ID${NC}\n"
     fi
-    monk cluster peer-tags --id "$SYSTEM_PEER_ID" --tag "$SYSTEM_TAGS"
-    printf "${GREEN}Tagged peer $SYSTEM_PEER_ID with system tag.${NC}\n"
-else
-    printf "${GREEN}System-tagged peer already exists: $SYSTEM_PEER_ID${NC}\n"
-fi
 
-SYSTEM_PEER_DOMAIN=$(echo "$PEERS_JSON" | jq -r --arg id "$SYSTEM_PEER_ID" '[.[] | select(.id == $id)][0].domain // empty')
-if [ -z "$SYSTEM_PEER_DOMAIN" ]; then
-    printf "${RED}Error: No domain found for system peer. Ensure --generate-domain was used during grow.${NC}\n"
-    exit 1
-fi
+    SYSTEM_PEER_DOMAIN=$(echo "$PEERS_JSON" | jq -r --arg id "$SYSTEM_PEER_ID" '[.[] | select(.id == $id)][0].domain // empty')
+    if [ -z "$SYSTEM_PEER_DOMAIN" ]; then
+        printf "${RED}Error: No domain found for system peer. Ensure --generate-domain was used during grow.${NC}\n"
+        exit 1
+    fi
 
-# A.6.2 Write registry template and load it
-cat > /tmp/registry-template.yaml << 'REGISTRY_TEMPLATE_EOF'
+    # A.6.2 Write registry template and load it
+    cat > /tmp/registry-template.yaml << 'REGISTRY_TEMPLATE_EOF'
 namespace: /system
 registry:
   defines: runnable
@@ -269,52 +341,53 @@ nginx:
           {{ end }}
         }
 REGISTRY_TEMPLATE_EOF
-monk load /tmp/registry-template.yaml
-rm -f /tmp/registry-template.yaml
+    monk load /tmp/registry-template.yaml
+    rm -f /tmp/registry-template.yaml
 
-# A.6.3 Generate registry credentials and htpasswd
-REGISTRY_USERNAME="monk"
-REGISTRY_PASSWORD=$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
-# Generate bcrypt hash compatible with nginx (htpasswd installed via workflow step)
-HTPASSWD=$(htpasswd -nbBC 10 "$REGISTRY_USERNAME" "$REGISTRY_PASSWORD")
-# Ensure nginx-compatible $2y$ prefix
-HTPASSWD=$(echo "$HTPASSWD" | sed 's/\$2b\$/\$2y\$/;s/\$2a\$/\$2y\$/')
-monk secrets add -r system/nginx "htpasswd=$HTPASSWD"
+    # A.6.3 Generate registry credentials and htpasswd
+    REGISTRY_USERNAME="monk"
+    REGISTRY_PASSWORD=$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16)
+    # Generate bcrypt hash compatible with nginx (htpasswd installed via workflow step)
+    HTPASSWD=$(htpasswd -nbBC 10 "$REGISTRY_USERNAME" "$REGISTRY_PASSWORD")
+    # Ensure nginx-compatible $2y$ prefix
+    HTPASSWD=$(echo "$HTPASSWD" | sed 's/\$2b\$/\$2y\$/;s/\$2a\$/\$2y\$/')
+    monk secrets add -r system/nginx "htpasswd=$HTPASSWD"
 
-# A.6.4 Run registry and nginx services on system-tagged peer
-printf "${GREEN}Starting registry service...${NC}\n"
-monk run -t system system/registry
-printf "${GREEN}Starting nginx proxy...${NC}\n"
-monk run -t system system/nginx
+    # A.6.4 Run registry and nginx services on system-tagged peer
+    printf "${GREEN}Starting registry service...${NC}\n"
+    monk run -t system system/registry
+    printf "${GREEN}Starting nginx proxy...${NC}\n"
+    monk run -t system system/nginx
 
-# A.6.5 Determine registry address and configure docker login
-REGISTRY_PORT=7080
-REGISTRY_ADDRESS="${SYSTEM_PEER_DOMAIN}:${REGISTRY_PORT}"
-printf "${GREEN}Registry available at: $REGISTRY_ADDRESS${NC}\n"
+    # A.6.5 Determine registry address and configure docker login
+    REGISTRY_PORT=7080
+    REGISTRY_ADDRESS="${SYSTEM_PEER_DOMAIN}:${REGISTRY_PORT}"
+    printf "${GREEN}Registry available at: $REGISTRY_ADDRESS${NC}\n"
 
-# Wait for registry to be ready and configure docker login
-RETRIES=0
-REGISTRY_READY=false
-while [ "$RETRIES" -lt 5 ]; do
-    RETRIES=$((RETRIES + 1))
-    printf "  Waiting for registry to be ready (attempt $RETRIES/5)...\n"
-    sleep 10
-    if monk registry --server "$REGISTRY_ADDRESS" -u "$REGISTRY_USERNAME" -p "$REGISTRY_PASSWORD" -a registry.local 2>/dev/null; then
-        REGISTRY_READY=true
-        break
+    # Wait for registry to be ready and configure docker login
+    RETRIES=0
+    REGISTRY_READY=false
+    while [ "$RETRIES" -lt 5 ]; do
+        RETRIES=$((RETRIES + 1))
+        printf "  Waiting for registry to be ready (attempt $RETRIES/5)...\n"
+        sleep 10
+        if monk registry --server "$REGISTRY_ADDRESS" -u "$REGISTRY_USERNAME" -p "$REGISTRY_PASSWORD" -a registry.local 2>/dev/null; then
+            REGISTRY_READY=true
+            break
+        fi
+    done
+    if [ "$REGISTRY_READY" != "true" ]; then
+        printf "${RED}Error: Registry did not become ready in time${NC}\n"
+        exit 1
     fi
-done
-if [ "$REGISTRY_READY" != "true" ]; then
-    printf "${RED}Error: Registry did not become ready in time${NC}\n"
-    exit 1
-fi
-printf "${GREEN}Docker login configured for registry.${NC}\n"
+    printf "${GREEN}Docker login configured for registry.${NC}\n"
 
-# A.6.6 Store registry credentials as a cluster secret for later retrieval
-REGISTRY_CREDS_JSON=$(printf '{"username":"%s","password":"%s","address":"%s","domain":"%s","source":"auto","tlsVerify":true}' \
-    "$REGISTRY_USERNAME" "$REGISTRY_PASSWORD" "$REGISTRY_ADDRESS" "$SYSTEM_PEER_DOMAIN")
-monk secrets add -r system/registry "registry-auth=$REGISTRY_CREDS_JSON"
-printf "${GREEN}Registry credentials stored as cluster secret.${NC}\n"
+    # A.6.6 Store registry credentials as a cluster secret for later retrieval
+    REGISTRY_CREDS_JSON=$(printf '{"username":"%s","password":"%s","address":"%s","domain":"%s","source":"auto","tlsVerify":true}' \
+        "$REGISTRY_USERNAME" "$REGISTRY_PASSWORD" "$REGISTRY_ADDRESS" "$SYSTEM_PEER_DOMAIN")
+    monk secrets add -r system/registry "registry-auth=$REGISTRY_CREDS_JSON"
+    printf "${GREEN}Registry credentials stored as cluster secret.${NC}\n"
+fi
 
 # A.7 Inject workload secrets
 
@@ -341,52 +414,93 @@ if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
 fi
 printf "${GREEN}Cluster registered.${NC}\n"
 
-# B.2 Create environment and link to cluster
-printf "${GREEN}Creating environment: $ENVIRONMENT_NAME...${NC}\n"
-BRANCH_NAME="${BRANCH_NAME:-$ENVIRONMENT_NAME}"
-GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-}"
-GITHUB_ENVIRONMENT="${GITHUB_ENVIRONMENT:-capsule-$ENVIRONMENT_NAME}"
-NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-ENV_PAYLOAD=$(jq -n \
-    --arg name "$ENVIRONMENT_NAME" \
-    --arg clusterId "$CLUSTER_ID" \
-    --arg projectSlug "$MONK_PROJECT_SLUG" \
+# B.2 Ensure environment exists and is linked to the resolved cluster
+CAPSULE_SETTINGS_PAYLOAD=$(jq -n \
     --arg branch "$BRANCH_NAME" \
     --arg repository "$GITHUB_REPOSITORY" \
-    --arg orgSlug "$MONK_ORG_SLUG" \
-    --arg capsuleProjectSlug "$MONK_PROJECT_SLUG" \
-    --arg clusterName "$CLUSTER_NAME" \
     --arg githubEnvironment "$GITHUB_ENVIRONMENT" \
     --arg status "provisioning" \
     --arg now "$NOW_UTC" \
     '{
-      name: $name,
-      clusterId: $clusterId,
-      projectSlug: $projectSlug,
       settings: {
         capsule: {
           source: "dynenv",
           branch: $branch,
           repository: $repository,
-          orgSlug: $orgSlug,
-          projectSlug: $capsuleProjectSlug,
-          clusterName: $clusterName,
           githubEnvironment: $githubEnvironment,
           status: $status,
           updatedAt: $now
         }
       }
     }')
-HTTP_CODE=$(curl -s -o /tmp/env_response.json -w "%{http_code}" -X POST "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/environments" \
-    -H "$AUTH_HEADER" \
-    -H "Content-Type: application/json" \
-    -d "$ENV_PAYLOAD")
-if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-    printf "${RED}Error: Failed to create environment in backend (HTTP $HTTP_CODE)${NC}\n"
-    cat /tmp/env_response.json 2>/dev/null || true
-    exit 1
+
+if [ "$ENV_EXISTS" = "true" ]; then
+    printf "${GREEN}Environment exists. Reconciling link and metadata...${NC}\n"
+    if [ -z "$ENV_CLUSTER_ID" ] || [ "$ENV_CLUSTER_ID" != "$CLUSTER_ID" ]; then
+        LINK_HTTP_CODE=$(curl -s -o /tmp/env_link_response.json -w "%{http_code}" -X PUT "$ENV_PATH/cluster" \
+            -H "$AUTH_HEADER" \
+            -H "Content-Type: application/json" \
+            -d "{\"clusterId\":\"$CLUSTER_ID\",\"force\":true}")
+        if [ "$LINK_HTTP_CODE" -lt 200 ] || [ "$LINK_HTTP_CODE" -ge 300 ]; then
+            printf "${RED}Error: Failed to link environment to cluster (HTTP $LINK_HTTP_CODE)${NC}\n"
+            cat /tmp/env_link_response.json 2>/dev/null || true
+            exit 1
+        fi
+        ENV_CLUSTER_ID="$CLUSTER_ID"
+        printf "${GREEN}Environment linked to cluster $CLUSTER_ID.${NC}\n"
+    else
+        printf "${GREEN}Environment already linked to cluster $CLUSTER_ID.${NC}\n"
+    fi
+
+    PATCH_HTTP_CODE=$(curl -s -o /tmp/env_patch_response.json -w "%{http_code}" -X PATCH "$ENV_PATH" \
+        -H "$AUTH_HEADER" \
+        -H "Content-Type: application/json" \
+        -d "$CAPSULE_SETTINGS_PAYLOAD")
+    if [ "$PATCH_HTTP_CODE" -lt 200 ] || [ "$PATCH_HTTP_CODE" -ge 300 ]; then
+        printf "${RED}Error: Failed to update capsule metadata (HTTP $PATCH_HTTP_CODE)${NC}\n"
+        cat /tmp/env_patch_response.json 2>/dev/null || true
+        exit 1
+    fi
+    printf "${GREEN}Environment metadata updated.${NC}\n"
+else
+    printf "${GREEN}Creating environment: $ENVIRONMENT_NAME...${NC}\n"
+    ENV_CREATE_PAYLOAD=$(jq -n \
+        --arg name "$ENVIRONMENT_NAME" \
+        --arg clusterId "$CLUSTER_ID" \
+        --arg projectSlug "$MONK_PROJECT_SLUG" \
+        --arg branch "$BRANCH_NAME" \
+        --arg repository "$GITHUB_REPOSITORY" \
+        --arg githubEnvironment "$GITHUB_ENVIRONMENT" \
+        --arg status "provisioning" \
+        --arg now "$NOW_UTC" \
+        '{
+          name: $name,
+          clusterId: $clusterId,
+          projectSlug: $projectSlug,
+          settings: {
+            capsule: {
+              source: "dynenv",
+              branch: $branch,
+              repository: $repository,
+              githubEnvironment: $githubEnvironment,
+              status: $status,
+              updatedAt: $now
+            }
+          }
+        }')
+    HTTP_CODE=$(curl -s -o /tmp/env_response.json -w "%{http_code}" -X POST "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/environments" \
+        -H "$AUTH_HEADER" \
+        -H "Content-Type: application/json" \
+        -d "$ENV_CREATE_PAYLOAD")
+    if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+        printf "${RED}Error: Failed to create environment in backend (HTTP $HTTP_CODE)${NC}\n"
+        cat /tmp/env_response.json 2>/dev/null || true
+        exit 1
+    fi
+    ENV_EXISTS=true
+    ENV_CLUSTER_ID="$CLUSTER_ID"
+    printf "${GREEN}Environment created and linked to cluster.${NC}\n"
 fi
-printf "${GREEN}Environment created and linked to cluster.${NC}\n"
 
 # B.3 Registry credentials are stored as cluster secrets (step A.6.6),
 # and retrieved via monk secrets get in the fetch-metadata workflow job.

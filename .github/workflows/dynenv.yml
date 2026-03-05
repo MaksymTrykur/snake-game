@@ -2,9 +2,9 @@ name: Monk Capsules
 
 'on':
   push:
-    branches-ignore: [ "main", "master", "add-capsule" ]
+    branches-ignore: [ "main", "master", "snake-capsule" ]
   pull_request:
-    branches: [ "main", "master", "add-capsule" ]
+    branches: [ "main", "master", "snake-capsule" ]
     types: [closed]
   workflow_dispatch:
     inputs:
@@ -50,11 +50,7 @@ jobs:
           case "$EVENT" in
             push)
               BRANCH_NAME="${{ github.ref_name }}"
-              if [ "${{ github.event.created }}" = "true" ]; then
-                ACTION="provision_deploy"
-              else
-                ACTION="deploy"
-              fi
+              ACTION="provision_deploy"
               ;;
             pull_request)
               BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
@@ -96,7 +92,7 @@ jobs:
       image: monkreleases.azurecr.io/monk-ci:latest
     steps:
       - name: Install dependencies
-        run: apk add --no-cache curl jq apache2-utils
+        run: apk add --no-cache curl jq apache2-utils nodejs
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -129,7 +125,7 @@ jobs:
         if: ${{ success() }}
         run: |
           BRANCH="${{ needs.resolve-context.outputs.branch_name }}"
-          BASE="add-capsule"
+          BASE="snake-capsule"
           REPO="${{ github.repository }}"
           PR_TITLE="[capsule] $BRANCH"
           PR_BODY="Auto-created by Monk Capsules.\n\nClosing this PR will destroy the Capsule."
@@ -281,7 +277,7 @@ jobs:
       image: monkreleases.azurecr.io/monk-ci:latest
     steps:
       - name: Install dependencies
-        run: apk add --no-cache jq
+        run: apk add --no-cache jq nodejs
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -337,15 +333,12 @@ jobs:
         run: |
           NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
           PREVIEW_URL="${{ steps.preview_url.outputs.url }}"
-          PAYLOAD=$(jq -n             --arg branch "${{ needs.resolve-context.outputs.branch_name }}"             --arg repository "${{ github.repository }}"             --arg orgSlug "$MONK_ORG_SLUG"             --arg projectSlug "$MONK_PROJECT_SLUG"             --arg clusterName "${{ needs.resolve-context.outputs.cluster_name }}"             --arg githubEnvironment "capsule-${{ needs.resolve-context.outputs.environment_name }}"             --arg status "active"             --arg previewUrl "$PREVIEW_URL"             --arg now "$NOW_UTC"             '{
+          PAYLOAD=$(jq -n             --arg branch "${{ needs.resolve-context.outputs.branch_name }}"             --arg repository "${{ github.repository }}"             --arg githubEnvironment "capsule-${{ needs.resolve-context.outputs.environment_name }}"             --arg status "active"             --arg previewUrl "$PREVIEW_URL"             --arg now "$NOW_UTC"             '{
               settings: {
                 capsule: {
                   source: "dynenv",
                   branch: $branch,
                   repository: $repository,
-                  orgSlug: $orgSlug,
-                  projectSlug: $projectSlug,
-                  clusterName: $clusterName,
                   githubEnvironment: $githubEnvironment,
                   status: $status,
                   previewUrl: $previewUrl,
@@ -369,15 +362,12 @@ jobs:
         if: ${{ always() && steps.deploy.outcome == 'failure' }}
         run: |
           NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-          PAYLOAD=$(jq -n             --arg branch "${{ needs.resolve-context.outputs.branch_name }}"             --arg repository "${{ github.repository }}"             --arg orgSlug "$MONK_ORG_SLUG"             --arg projectSlug "$MONK_PROJECT_SLUG"             --arg clusterName "${{ needs.resolve-context.outputs.cluster_name }}"             --arg githubEnvironment "capsule-${{ needs.resolve-context.outputs.environment_name }}"             --arg status "failed"             --arg now "$NOW_UTC"             '{
+          PAYLOAD=$(jq -n             --arg branch "${{ needs.resolve-context.outputs.branch_name }}"             --arg repository "${{ github.repository }}"             --arg githubEnvironment "capsule-${{ needs.resolve-context.outputs.environment_name }}"             --arg status "failed"             --arg now "$NOW_UTC"             '{
               settings: {
                 capsule: {
                   source: "dynenv",
                   branch: $branch,
                   repository: $repository,
-                  orgSlug: $orgSlug,
-                  projectSlug: $projectSlug,
-                  clusterName: $clusterName,
                   githubEnvironment: $githubEnvironment,
                   status: $status,
                   updatedAt: $now
@@ -405,7 +395,7 @@ jobs:
       image: monkreleases.azurecr.io/monk-ci:latest
     steps:
       - name: Install dependencies
-        run: apk add --no-cache curl jq
+        run: apk add --no-cache curl jq nodejs
       - name: Checkout code
         uses: actions/checkout@v4
         with:
