@@ -1,5 +1,5 @@
 {
-  "mcpServers": {
+  "servers": {
     "monk": {
       "type": "http",
       "url": "http://localhost:7313/mcp"

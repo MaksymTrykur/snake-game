@@ -19,7 +19,6 @@ for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD ENVIRONMENT_NAME; do
 done
 
 MONK_TAG="${BRANCH_TAG:-default}"
-MONK_WORKLOAD="${MONK_WORKLOAD:-snake-game/snake-game-stack}"
 
 # Configure Monk CLI for non-interactive CI usage
 export MONK_SOCKET="monkcode://$MONKCODE"

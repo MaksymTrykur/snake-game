@@ -122,126 +122,20 @@ vercel-static-deploy:
         }
         EOF
 
+
 vercel-url-ready:
-  defines: runnable
-  # Wait for the *latest* Vercel deployment (preview or production) to become READY.
-  # This replaces the previous wait-for-action(get-production-urls) which can fail when
-  # production URLs are not available yet.
-  permitted-secrets:
-    default-vercel-token: true
-  containers:
-    main:
-      image: monkimages.azurecr.io/example-vercel-build:latest
-      restart: "no"
-      bash: /tmp/wait.sh
+  defines: utils/wait-for-action
+  target: snake-game/vercel-project
+  action: get-production-urls
   services:
-    status:
-      # Lightweight service so other components can "connect" to this runnable for depends wiring.
-      container: main
-      port: 1
-      protocol: tcp
-  connections:
-    vercel-project:
-      target: snake-game/vercel-project
-      service: data
-    deploy:
-      target: snake-game/vercel-static-deploy
-      service: status
+    data:
+      protocol: custom
   depends:
     wait-for:
-      entities:
-        - snake-game/vercel-project
       runnables:
+        - snake-game/vercel-project
         - snake-game/vercel-static-deploy
-      timeout: 600
-  variables:
-    vercel-token:
-      type: string
-      value: <- secret("default-vercel-token")
-      env: VERCEL_TOKEN
-    vercel-project-id:
-      type: string
-      value: <- connection-target("vercel-project") entity-state get-member("id")
-      env: VERCEL_PROJECT_ID
-    # If set to true, attempt to promote/alias the latest deployment to a production alias.
-    # This is optional and best-effort (will not fail the stack on alias issues).
-    promote-to-production:
-      type: bool
-      value: false
-      env: PROMOTE_TO_PRODUCTION
-    # Optional hostname to alias the deployment to (e.g. "snake.example.com").
-    # Requires that the domain is configured in Vercel for the project.
-    production-alias:
-      type: string
-      value: ""
-      env: PRODUCTION_ALIAS
-    wait-timeout-seconds:
-      type: int
-      value: 600
-      env: WAIT_TIMEOUT_SECONDS
-    poll-interval-seconds:
-      type: int
-      value: 5
-      env: POLL_INTERVAL_SECONDS
-  files:
-    wait:
-      container: main
-      path: /tmp/wait.sh
-      mode: 493
-      contents: |
-        #!/bin/sh
-        set -eu
-
-        api="https://api.vercel.com"
-        start="$(date +%s)"
-
-        echo "Waiting for latest Vercel deployment to become READY for project $VERCEL_PROJECT_ID ..."
-
-        while :; do
-          now="$(date +%s)"
-          elapsed="$((now - start))"
-          if [ "$elapsed" -ge "${WAIT_TIMEOUT_SECONDS:-600}" ]; then
-            echo "Timed out after ${WAIT_TIMEOUT_SECONDS:-600}s waiting for a READY deployment."
-            echo "Continuing without failing the stack; endpoints may temporarily point to an older URL."
-            exit 0
-          fi
-
-          # Get project details (includes latestDeployment info)
-          project_json="$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
-            "$api/v9/projects/$VERCEL_PROJECT_ID" 2>/dev/null || true)"
-
-          # Extract latest deployment id and url.
-          # This is a minimal parser to avoid requiring jq in the image.
-          dep_id="$(echo "$project_json" | tr -d '\n' | sed -n 's/.*"latestDeployment":{"id":"\([^"]*\)".*/\1/p')"
-          dep_url="$(echo "$project_json" | tr -d '\n' | sed -n 's/.*"latestDeployment":{"id":"[^"]*","url":"\([^"]*\)".*/\1/p')"
-
-          if [ -n "$dep_id" ]; then
-            dep_json="$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
-              "$api/v13/deployments/$dep_id" 2>/dev/null || true)"
-            dep_state="$(echo "$dep_json" | tr -d '\n' | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
-            [ -n "$dep_url" ] || dep_url="$(echo "$dep_json" | tr -d '\n' | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')"
-
-            echo "Latest deployment: id=$dep_id url=$dep_url state=$dep_state"
-
-            # Vercel uses "READY" (and sometimes "READY" in uppercase) for successful deployments.
-            if [ "$dep_state" = "READY" ] || [ "$dep_state" = "ready" ]; then
-              echo "Deployment is READY."
-
-              # Optional: alias to production/custom hostname (best-effort).
-              if [ "${PROMOTE_TO_PRODUCTION:-false}" = "true" ] && [ -n "${PRODUCTION_ALIAS:-}" ]; then
-                echo "Attempting to alias deployment to ${PRODUCTION_ALIAS} (best-effort)..."
-                vercel alias set "https://${dep_url}" "${PRODUCTION_ALIAS}" --yes -t "$VERCEL_TOKEN" >/dev/null 2>&1 || \
-                  echo "Alias step failed (continuing). Ensure the domain is configured in Vercel and token has access."
-              fi
-
-              exit 0
-            fi
-          else
-            echo "No latestDeployment info available yet (project may still be initializing)."
-          fi
-
-          sleep "${POLL_INTERVAL_SECONDS:-5}"
-        done
+      timeout: 180
 
 endpoints:
   defines: monkec/endpoints
@@ -250,7 +144,7 @@ endpoints:
       description: Snake Game web UI (Vercel)
       # Use the resolved latest deployment URL, which works for both preview and production.
       # (Production URLs may not be immediately available right after a deployment.)
-      url: <- "https://" connection-target("vercel-project") entity-state get-member("latest_deployment") get-member("url") concat-all
+      url: <- "https://" connection-target("vercel-project") entity-state get-member("url")
     backend:
       description: Snake Game backend/API (ingress)
       url: <- "https://" connection-domain-name("app") "/" concat-all
@@ -267,7 +161,7 @@ endpoints:
       service: status
     vercel-url-ready:
       target: snake-game/vercel-url-ready
-      service: status
+      service: data
   depends:
     wait-for:
       runnables:
