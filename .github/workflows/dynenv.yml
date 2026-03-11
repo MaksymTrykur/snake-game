@@ -2,9 +2,9 @@ name: Monk Capsules
 
 'on':
   push:
-    branches-ignore: [ "main", "master", "snake-capsule" ]
+    branches-ignore: [ "main", "master", "branch1" ]
   pull_request:
-    branches: [ "main", "master", "snake-capsule" ]
+    branches: [ "main", "master", "branch1" ]
     types: [closed]
   schedule:
     - cron: "0 * * * *"
@@ -35,7 +35,7 @@ permissions:
   deployments: write
 
 concurrency:
-  group: monk-capsule-${{ github.event.inputs.branch || github.ref || github.event.pull_request.head.ref || github.run_id }}
+  group: monk-capsule-${{ github.event.inputs.branch || github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -89,7 +89,8 @@ jobs:
                   echo "[ACT] Would dispatch workflow: ref=$DEFAULT_BRANCH action=$action branch=$branch source=schedule"
                   continue
                 fi
-                curl -s -X POST "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/dynenv.yml/dispatches"                   -H "Authorization: Bearer $GITHUB_TOKEN"                   -H "Accept: application/vnd.github+json"                   -H "Content-Type: application/json"                   -d "{"ref":"$DEFAULT_BRANCH","inputs":{"action":"$action","branch":"$branch","source":"schedule"}}" > /dev/null
+                dispatch_payload=$(jq -n                   --arg ref "$DEFAULT_BRANCH"                   --arg action "$action"                   --arg branch "$branch"                   --arg source "schedule"                   '{ref:$ref,inputs:{action:$action,branch:$branch,source:$source}}')
+                curl -s -X POST "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/dynenv.yml/dispatches"                   -H "Authorization: Bearer $GITHUB_TOKEN"                   -H "Accept: application/vnd.github+json"                   -H "Content-Type: application/json"                   -d "$dispatch_payload" > /dev/null
               done
 
   resolve-context:
@@ -247,7 +248,7 @@ jobs:
         if: ${{ success() && env.ACT != 'true' }}
         run: |
           BRANCH="${{ needs.resolve-context.outputs.branch_name }}"
-          BASE="snake-capsule"
+          BASE="branch1"
           REPO="${{ github.repository }}"
           PR_TITLE="[capsule] $BRANCH"
           PR_BODY="Auto-created by Monk Capsules.\n\nClosing this PR will destroy the Capsule."
