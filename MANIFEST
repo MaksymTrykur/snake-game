@@ -1,19 +1,11 @@
 REPO snake-game
-
 LOAD snake-game.yaml
+ENTRY snake-game/snake-game-stack
+IMAGE snake-game:latest snake-game/app snake-game Dockerfile
 
-ENV dev staging prod
+# User-provided secrets
+SECRET default-vercel-token
 
-# User-provided secret used for MongoDB root password (also used by the app to connect)
-SECRET mongodb-root-password
-
-# Default entrypoint (prod target)
-ENTRY snake-game/prod
-ENTRY dev:snake-game/prod
-ENTRY staging:snake-game/prod
-ENTRY prod:snake-game/prod
-
-# Pre-built image referenced by snake-game/app
-IMAGE snake-game:latest snake-game/app . Dockerfile
-
-# No external blobs needed (static files are baked into the image)
+# Static frontend files published to Vercel
+BLOBS frontend:public/cobra
+BLOBSIGNORE .git node_modules .DS_Store

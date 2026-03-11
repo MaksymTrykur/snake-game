@@ -1,0 +1,12 @@
+{
+  "action": "closed",
+  "pull_request": {
+    "number": 123,
+    "head": {
+      "ref": "snake-capsule"
+    },
+    "base": {
+      "ref": "main"
+    }
+  }
+}

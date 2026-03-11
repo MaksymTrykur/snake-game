@@ -7,7 +7,8 @@ const mongoose = require('mongoose');
 
 const path = require('path');
 
-const { DB_CONN } = process.env;
+// Read connection string from env at runtime. Support both DB_CONN and MONGODB_URI.
+// Avoid destructuring process.env at module load time to prevent stale values in some runtimes.
 
 // add static middleward
 fastify.register(require('@fastify/static'), {
@@ -44,9 +45,15 @@ fastify.get('/highscore', async (request, reply) => {
 // Run the server!
 const start = async () => {
     try {
-        const dbConn = (DB_CONN ?? '').trim();
+        const rawConn = process.env.DB_CONN ?? process.env.MONGODB_URI ?? '';
+        // Ensure we pass a clean, valid string to mongoose.connect. Some deployment systems
+        // inject quotes/newlines which can cause: MongoParseError: URI malformed
+        const dbConn = String(rawConn)
+            .trim()
+            .replace(/^['"]|['"]$/g, '') // strip wrapping single/double quotes
+            .replace(/\r?\n/g, ''); // strip newlines
         if (!dbConn) {
-            fastify.log.warn('DB_CONN not set; starting without MongoDB (highscore routes will be unavailable)');
+            fastify.log.warn('DB_CONN/MONGODB_URI not set; starting without MongoDB (highscore routes will be unavailable)');
         } else {
             await mongoose.connect(dbConn, { useNewUrlParser: true, useUnifiedTopology: true });
             console.log('MongoDB connected...');

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "monk": {
+      "httpUrl": "http://localhost:7313/mcp"
+    }
+  }
+}
