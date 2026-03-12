@@ -42,6 +42,7 @@ jobs:
   schedule-reconcile:
     if: ${{ github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
+    environment: monk-capsules
     steps:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y curl jq
@@ -50,14 +51,14 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          MONK_SUBSCRIPTION_TOKEN: ${{ secrets.MONK_SUBSCRIPTION_TOKEN }}
+          MONK_CAPSULE_TOKEN: ${{ secrets.MONK_CAPSULE_TOKEN }}
           MONK_SUBSCRIPTION_API_BASE: ${{ vars.MONK_SUBSCRIPTION_API_BASE }}
           MONK_ORG_SLUG: ${{ vars.MONK_ORG_SLUG }}
           MONK_PROJECT_SLUG: ${{ vars.MONK_PROJECT_SLUG }}
         run: |
           set -e
           ENV_ENDPOINT="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments"
-          HTTP_CODE=$(curl -s -o /tmp/capsule_envs.json -w "%{http_code}"             "$ENV_ENDPOINT"             -H "Authorization: Bearer $MONK_SUBSCRIPTION_TOKEN")
+          HTTP_CODE=$(curl -s -o /tmp/capsule_envs.json -w "%{http_code}"             "$ENV_ENDPOINT"             -H "Authorization: Bearer $MONK_CAPSULE_TOKEN")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
             echo "::error::Failed to list environments for scheduled reconciliation (HTTP $HTTP_CODE)"
             cat /tmp/capsule_envs.json 2>/dev/null || true
@@ -94,6 +95,7 @@ jobs:
 
   resolve-context:
     runs-on: ubuntu-latest
+    environment: monk-capsules
     outputs:
       should_run: ${{ steps.ctx.outputs.should_run }}
       action: ${{ steps.ctx.outputs.action }}
@@ -106,7 +108,7 @@ jobs:
         id: ctx
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-          MONK_SUBSCRIPTION_TOKEN: ${{ secrets.MONK_SUBSCRIPTION_TOKEN }}
+          MONK_CAPSULE_TOKEN: ${{ secrets.MONK_CAPSULE_TOKEN }}
           MONK_SUBSCRIPTION_API_BASE: ${{ vars.MONK_SUBSCRIPTION_API_BASE }}
           MONK_ORG_SLUG: ${{ vars.MONK_ORG_SLUG }}
           MONK_PROJECT_SLUG: ${{ vars.MONK_PROJECT_SLUG }}
@@ -143,7 +145,7 @@ jobs:
             | tr '[:upper:]' '[:lower:]' \
             | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
           [ -z "$SAFE_BRANCH" ] && SAFE_BRANCH="default"
-          if [ "$ACTION" = "provision_deploy" ] && { [ "$EVENT" = "push" ] || [ "$SOURCE" = "schedule" ]; } && [ -n "$MONK_SUBSCRIPTION_API_BASE" ] && [ -n "$MONK_SUBSCRIPTION_TOKEN" ] && [ -n "$MONK_ORG_SLUG" ] && [ -n "$MONK_PROJECT_SLUG" ]; then
+          if [ "$ACTION" = "provision_deploy" ] && { [ "$EVENT" = "push" ] || [ "$SOURCE" = "schedule" ]; } && [ -n "$MONK_SUBSCRIPTION_API_BASE" ] && [ -n "$MONK_CAPSULE_TOKEN" ] && [ -n "$MONK_ORG_SLUG" ] && [ -n "$MONK_PROJECT_SLUG" ]; then
             branch_matches_any() {
               local branch="$1"
               local patterns="$2"
@@ -156,12 +158,12 @@ jobs:
               done <<< "$patterns"
               return 1
             }
-            PROJECTS_ENDPOINT="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects"
-            PROJECTS_HTTP_CODE=$(curl -s -o /tmp/capsule_projects.json -w "%{http_code}"               "$PROJECTS_ENDPOINT"               -H "Authorization: Bearer $MONK_SUBSCRIPTION_TOKEN")
-            if [ "$PROJECTS_HTTP_CODE" -ge 200 ] && [ "$PROJECTS_HTTP_CODE" -lt 300 ]; then
-              CAPSULES_ENABLED="$(jq -r --arg slug "$MONK_PROJECT_SLUG" '.[] | select(.slug == $slug) | .settings.capsules.enabled // empty' /tmp/capsule_projects.json | head -n 1)"
-              BRANCH_INCLUDE="$(jq -r --arg slug "$MONK_PROJECT_SLUG" '.[] | select(.slug == $slug) | .settings.capsules.branchInclude[]?' /tmp/capsule_projects.json)"
-              BRANCH_EXCLUDE="$(jq -r --arg slug "$MONK_PROJECT_SLUG" '.[] | select(.slug == $slug) | .settings.capsules.branchExclude[]?' /tmp/capsule_projects.json)"
+            PROJECT_ENDPOINT="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG"
+            PROJECT_HTTP_CODE=$(curl -s -o /tmp/capsule_project.json -w "%{http_code}"               "$PROJECT_ENDPOINT"               -H "Authorization: Bearer $MONK_CAPSULE_TOKEN")
+            if [ "$PROJECT_HTTP_CODE" -ge 200 ] && [ "$PROJECT_HTTP_CODE" -lt 300 ]; then
+              CAPSULES_ENABLED="$(jq -r '.settings.capsules.enabled // empty' /tmp/capsule_project.json)"
+              BRANCH_INCLUDE="$(jq -r '.settings.capsules.branchInclude[]?' /tmp/capsule_project.json)"
+              BRANCH_EXCLUDE="$(jq -r '.settings.capsules.branchExclude[]?' /tmp/capsule_project.json)"
               if [ "$CAPSULES_ENABLED" = "false" ]; then
                 echo "Capsules are disabled for project $MONK_PROJECT_SLUG, skipping provision."
                 echo "should_run=false" >> "$GITHUB_OUTPUT"
@@ -178,10 +180,10 @@ jobs:
                 exit 0
               fi
             else
-              echo "::warning::Failed to inspect capsule project scope (HTTP $PROJECTS_HTTP_CODE); continuing."
+              echo "::warning::Failed to inspect capsule project scope (HTTP $PROJECT_HTTP_CODE); continuing."
             fi
             ENV_ENDPOINT="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments"
-            HTTP_CODE=$(curl -s -o /tmp/capsule_envs.json -w "%{http_code}"               "$ENV_ENDPOINT"               -H "Authorization: Bearer $MONK_SUBSCRIPTION_TOKEN")
+            HTTP_CODE=$(curl -s -o /tmp/capsule_envs.json -w "%{http_code}"               "$ENV_ENDPOINT"               -H "Authorization: Bearer $MONK_CAPSULE_TOKEN")
             if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
               MANUAL_STATE="$(jq -r --arg repo "$GITHUB_REPOSITORY" --arg branch "$BRANCH_NAME" '.[] | select(.settings.capsule.repository? == $repo) | select(.settings.capsule.branch? == $branch) | .settings.capsule.manualState // empty' /tmp/capsule_envs.json | head -n 1)"
               if [ "$MANUAL_STATE" = "down" ]; then
