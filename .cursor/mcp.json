@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "monk": {
-      "type": "streamableHttp",
-      "url": "http://localhost:7313/mcp"
-    }
-  }
-}

@@ -92,7 +92,7 @@ else
     # remote nodes. Connecting directly via monkcode:// would leave the node we
     # happen to talk to dangling.
     printf "${GREEN}Minting JIT CLI token for cleanup...${NC}\n"
-    CLI_PERMS="[\"deploy:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"delete:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"read:/projects/$MONK_PROJECT_SLUG/clusters/**\"]"
+    CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\"]"
     MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "cleanup-$CLUSTER_NAME" 60)
     if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
         printf "${RED}Error: JIT CLI token mint returned empty${NC}\n"

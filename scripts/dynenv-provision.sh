@@ -41,13 +41,113 @@ mint_jit_token() {
 }
 
 printf "${GREEN}Minting JIT CLI token...${NC}\n"
-CLI_PERMS="[\"deploy:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"delete:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"read:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"]"
+CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"]"
 MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "provision-$CLUSTER_NAME" 90)
 if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
     printf "${RED}Error: JIT CLI token mint returned empty${NC}\n"
     exit 1
 fi
 printf "${GREEN}JIT CLI token minted.${NC}\n"
+
+# Best-effort: sync backend cluster members into Monk cluster users.
+sync_cluster_users() {
+    local cluster_id="$1"
+    local monkcode="$2"
+
+    if [ -z "$cluster_id" ] || [ -z "$monkcode" ]; then
+        printf "${YELLOW}Skipping cluster user sync: cluster ID or monkcode is missing.${NC}\n"
+        return 0
+    fi
+
+    printf "${GREEN}Syncing cluster users from subscription service...${NC}\n"
+    MEMBERS_HTTP_CODE=$(curl -s -o /tmp/cluster_members_response.json -w "%{http_code}" \
+        "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/clusters/$cluster_id/members" \
+        -H "$AUTH_HEADER")
+    if [ "$MEMBERS_HTTP_CODE" -lt 200 ] || [ "$MEMBERS_HTTP_CODE" -ge 300 ]; then
+        printf "${YELLOW}Warning: Failed to retrieve cluster members for sync (HTTP $MEMBERS_HTTP_CODE). Continuing without sync.${NC}\n"
+        cat /tmp/cluster_members_response.json 2>/dev/null || true
+        return 0
+    fi
+
+    if ! monk --json --no-interactive --nofancy --nocolor -s "monkcode://$monkcode" cluster users list > /tmp/cluster_users_existing_raw.json 2>/tmp/cluster_users_existing.err; then
+        printf "${YELLOW}Warning: Failed to list existing cluster users. Continuing without sync.${NC}\n"
+        cat /tmp/cluster_users_existing.err 2>/dev/null || true
+        return 0
+    fi
+    tail -n 1 /tmp/cluster_users_existing_raw.json > /tmp/cluster_users_existing.json
+
+    if ! jq -r '
+        .[]? |
+        [
+          ((.email // .Email // .User.Email // "") | tostring | ascii_downcase),
+          (((.role // .Role // "member") | tostring | ascii_downcase) | if . == "owner" or . == "admin" then "admin" else "user" end)
+        ] |
+        select(.[0] != "") |
+        @tsv
+      ' /tmp/cluster_members_response.json | sort -u > /tmp/cluster_users_desired.tsv; then
+        printf "${YELLOW}Warning: Failed to parse desired cluster members for sync. Continuing without sync.${NC}\n"
+        return 0
+    fi
+
+    if ! jq -r '
+        def users_array:
+          if type == "array" then .
+          elif type == "object" and (.users | type) == "array" then .users
+          elif type == "object" and (.Users | type) == "array" then .Users
+          elif type == "object" and (.data | type) == "array" then .data
+          elif type == "object" and (.result | type) == "array" then .result
+          else []
+          end;
+        users_array[]? |
+        [
+          ((.email // .Email // "") | tostring | ascii_downcase),
+          ((.role // .Role // "user") | tostring | ascii_downcase)
+        ] |
+        select(.[0] != "") |
+        @tsv
+      ' /tmp/cluster_users_existing.json | sort -u > /tmp/cluster_users_present.tsv; then
+        printf "${YELLOW}Warning: Failed to parse existing cluster users. Continuing without sync.${NC}\n"
+        return 0
+    fi
+
+    added=0
+    updated=0
+    removed=0
+
+    while IFS="$(printf '	')" read -r email role; do
+        [ -n "$email" ] || continue
+        present_role=$(awk -F '	' -v email="$email" '$1 == email { print $2; exit }' /tmp/cluster_users_present.tsv)
+        if [ -z "$present_role" ]; then
+            if monk --json --no-interactive --nofancy --nocolor -s "monkcode://$monkcode" cluster users add --email "$email" --role "$role" > /tmp/cluster_user_add.json 2>/tmp/cluster_user_add.err; then
+                added=$((added + 1))
+            else
+                printf "${YELLOW}Warning: Failed to add cluster user $email. Continuing.${NC}\n"
+                cat /tmp/cluster_user_add.err 2>/dev/null || true
+            fi
+        elif [ "$present_role" != "$role" ] && [ "$present_role" != "owner" ]; then
+            if monk --json --no-interactive --nofancy --nocolor -s "monkcode://$monkcode" cluster users add --email "$email" --role "$role" > /tmp/cluster_user_update.json 2>/tmp/cluster_user_update.err; then
+                updated=$((updated + 1))
+            else
+                printf "${YELLOW}Warning: Failed to update cluster user $email. Continuing.${NC}\n"
+                cat /tmp/cluster_user_update.err 2>/dev/null || true
+            fi
+        fi
+    done < /tmp/cluster_users_desired.tsv
+
+    while IFS="$(printf '	')" read -r email role; do
+        [ -n "$email" ] || continue
+        if ! awk -F '	' -v email="$email" '$1 == email { found = 1 } END { exit found ? 0 : 1 }' /tmp/cluster_users_desired.tsv; then
+            if monk --json --no-interactive --nofancy --nocolor -s "monkcode://$monkcode" cluster users remove --email "$email" > /tmp/cluster_user_remove.json 2>/tmp/cluster_user_remove.err; then
+                removed=$((removed + 1))
+            else
+                printf "${YELLOW}Warning: Failed to remove cluster user $email. Continuing.${NC}\n"
+                cat /tmp/cluster_user_remove.err 2>/dev/null || true
+            fi
+        fi
+    done < /tmp/cluster_users_present.tsv
+
+    printf "${GREEN}Cluster user sync complete (+%s ~%s -%s).${NC}\n" "$added" "$updated" "$removed"
+}
 
 # Configure Monk CLI for non-interactive CI usage
 export MONK_SERVICE_TOKEN="$MONK_JIT_CLI_TOKEN"
@@ -117,6 +217,7 @@ if [ "$ENV_EXISTS" = "true" ] && [ "$USE_EXISTING_CLUSTER" = "true" ]; then
             -H "$AUTH_HEADER" \
             -H "Content-Type: application/json" \
             -d "{\"clusterId\":\"$CLUSTER_ID\",\"name\":\"$CLUSTER_NAME\",\"monkcode\":\"$MONKCODE\",\"projectSlug\":\"$MONK_PROJECT_SLUG\"}" || true
+        sync_cluster_users "$CLUSTER_ID" "$MONKCODE"
         printf "${GREEN}Skipping provisioning step.${NC}\n"
         exit 0
     fi
@@ -472,6 +573,8 @@ else
     ENV_CLUSTER_ID="$CLUSTER_ID"
     printf "${GREEN}Environment created and linked to cluster.${NC}\n"
 fi
+
+sync_cluster_users "$CLUSTER_ID" "$MONKCODE"
 
 # B.3 Registry credentials are stored as cluster secrets (step A.6.6),
 # and retrieved via monk secrets get in the fetch-metadata workflow job.
