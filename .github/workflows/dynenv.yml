@@ -2,9 +2,9 @@ name: Monk Capsules
 
 'on':
   push:
-    branches-ignore: [ "main", "master", "branch-new1" ]
+    branches-ignore: [ "main", "master", "update-1" ]
   pull_request:
-    branches: [ "main", "master", "branch-new1" ]
+    branches: [ "main", "master", "update-1" ]
     types: [closed]
   schedule:
     - cron: "0 * * * *"
@@ -57,7 +57,7 @@ jobs:
           MONK_PROJECT_SLUG: ${{ vars.MONK_PROJECT_SLUG }}
         run: |
           set -e
-          ENV_ENDPOINT="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments"
+          ENV_ENDPOINT="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/environments?projectSlug=$MONK_PROJECT_SLUG"
           HTTP_CODE=$(curl -s -o /tmp/capsule_envs.json -w "%{http_code}"             "$ENV_ENDPOINT"             -H "Authorization: Bearer $MONK_CAPSULE_TOKEN")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
             echo "::error::Failed to list environments for scheduled reconciliation (HTTP $HTTP_CODE)"
@@ -183,18 +183,6 @@ jobs:
             else
               echo "::warning::Failed to inspect capsule project scope (HTTP $PROJECT_HTTP_CODE); continuing."
             fi
-            ENV_ENDPOINT="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments"
-            HTTP_CODE=$(curl -s -o /tmp/capsule_envs.json -w "%{http_code}"               "$ENV_ENDPOINT"               -H "Authorization: Bearer $MONK_CAPSULE_TOKEN")
-            if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-              MANUAL_STATE="$(jq -r --arg repo "$GITHUB_REPOSITORY" --arg branch "$BRANCH_NAME" '.[] | select(.settings.capsule.repository? == $repo) | select(.settings.capsule.branch? == $branch) | .settings.capsule.manualState // empty' /tmp/capsule_envs.json | head -n 1)"
-              if [ "$MANUAL_STATE" = "down" ]; then
-                echo "Manual Down is active for $BRANCH_NAME, skipping provision."
-                echo "should_run=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            else
-              echo "::warning::Failed to inspect capsule manual state (HTTP $HTTP_CODE); continuing."
-            fi
           fi
           echo "should_run=true" >> "$GITHUB_OUTPUT"
           echo "action=$ACTION" >> "$GITHUB_OUTPUT"
@@ -250,7 +238,7 @@ jobs:
         if: ${{ success() && env.ACT != 'true' }}
         run: |
           BRANCH="${{ needs.resolve-context.outputs.branch_name }}"
-          BASE="branch-new1"
+          BASE="update-1"
           REPO="${{ github.repository }}"
           PR_TITLE="[capsule] $BRANCH"
           PR_BODY="Auto-created by Monk Capsules.\n\nClosing this PR will destroy the Capsule."
@@ -328,7 +316,7 @@ jobs:
           if ! JIT_RESPONSE=$(curl -sf -X POST "$MONK_AUTH_SERVICE_URL/api-keys" \
               -H "Authorization: Bearer $MONK_CAPSULE_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"name\":\"fetch-meta-$ENVIRONMENT_NAME\",\"permissions\":[\"deploy:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"read:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"],\"expires_in_minutes\":30}"); then
+              -d "{\"name\":\"fetch-meta-$ENVIRONMENT_NAME\",\"permissions\":[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"],\"expires_in_minutes\":30}"); then
               echo "::error::Failed to mint JIT CLI token (HTTP error)"
               exit 1
           fi
