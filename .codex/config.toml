@@ -1,2 +1,3 @@
 [mcp_servers.monk]
 url = "http://localhost:7313/mcp"
+tool_timeout_sec = 1800

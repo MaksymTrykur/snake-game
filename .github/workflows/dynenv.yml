@@ -2,9 +2,9 @@ name: Monk Capsules
 
 'on':
   push:
-    branches-ignore: [ "main", "master", "update-1" ]
+    branches-ignore: [ "main", "master", "update-2" ]
   pull_request:
-    branches: [ "main", "master", "update-1" ]
+    branches: [ "main", "master", "update-2" ]
     types: [closed]
   schedule:
     - cron: "0 * * * *"
@@ -231,14 +231,11 @@ jobs:
           CLOUD_INSTANCE_COUNT: ${{ vars.CLOUD_INSTANCE_COUNT }}
           CLOUD_DISK_SIZE: ${{ vars.CLOUD_DISK_SIZE }}
           BRANCH_TAG: ${{ needs.resolve-context.outputs.branch_tag }}
-          DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
-          DEFAULT_VERCEL_TOKEN: ${{ secrets.DEFAULT_VERCEL_TOKEN }}
-          WORKLOAD_SECRETS: "default-vercel-token:DEFAULT_VERCEL_TOKEN"
       - name: Create pull request for branch lifecycle
         if: ${{ success() && env.ACT != 'true' }}
         run: |
           BRANCH="${{ needs.resolve-context.outputs.branch_name }}"
-          BASE="update-1"
+          BASE="update-2"
           REPO="${{ github.repository }}"
           PR_TITLE="[capsule] $BRANCH"
           PR_BODY="Auto-created by Monk Capsules.\n\nClosing this PR will destroy the Capsule."
@@ -452,7 +449,7 @@ jobs:
           MONKCODE_B64: ${{ needs.fetch-metadata.outputs.monkcode }}
           MONK_JIT_CLI_TOKEN_B64: ${{ needs.fetch-metadata.outputs.monk_jit_cli_token }}
           BRANCH_TAG: ${{ needs.resolve-context.outputs.branch_tag }}
-          MONK_WORKLOAD: "snake-game/snake-game-stack"
+          MONK_WORKLOAD: "snake-game/staging"
           ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
       - name: Get preview URL
         id: preview_url
@@ -521,7 +518,7 @@ jobs:
         env:
           MONKCODE_B64: ${{ needs.fetch-metadata.outputs.monkcode }}
           MONK_JIT_CLI_TOKEN_B64: ${{ needs.fetch-metadata.outputs.monk_jit_cli_token }}
-          MONK_WORKLOAD: "snake-game/snake-game-stack"
+          MONK_WORKLOAD: "snake-game/staging"
       - name: Update capsule metadata (success)
         if: ${{ success() }}
         run: |

@@ -1,11 +1,8 @@
 REPO snake-game
 LOAD snake-game.yaml
-ENTRY snake-game/snake-game-stack
-IMAGE snake-game:latest snake-game/app snake-game Dockerfile
-
-# User-provided secrets
-SECRET default-vercel-token
-
-# Static frontend files published to Vercel
-BLOBS frontend:public/cobra
-BLOBSIGNORE .git node_modules .DS_Store
+ENV local staging prod
+ENTRY snake-game/staging
+ENTRY local:snake-game/local
+ENTRY staging:snake-game/staging
+ENTRY prod:snake-game/prod
+IMAGE snake-game:latest snake-game/snake-game-base,snake-game/snake-game-local,snake-game/snake-game-staging,snake-game/snake-game-prod . Dockerfile
