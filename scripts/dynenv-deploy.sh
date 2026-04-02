@@ -19,6 +19,7 @@ for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD ENVIRONMENT_NAME; do
 done
 
 MONK_TAG="${BRANCH_TAG:-default}"
+MONK_REPO="${MONK_REPO:-}"
 
 # Configure Monk CLI for non-interactive CI usage
 export MONK_SOCKET="monkcode://$MONKCODE"
@@ -31,11 +32,22 @@ if [ ! -f "MANIFEST" ]; then
     exit 1
 fi
 
-printf "${GREEN}Loading MANIFEST...${NC}\n"
-monk load MANIFEST
+# When MONK_REPO is set (shared cluster), load under a dedicated repo namespace
+# and use --repo/--secret-scope flags on update for isolation.
+if [ -n "$MONK_REPO" ]; then
+    printf "${GREEN}Loading MANIFEST into repo '$MONK_REPO'...${NC}\n"
+    monk load --repo "$MONK_REPO" MANIFEST
 
-printf "${GREEN}Deploying workload $MONK_WORKLOAD to tag $MONK_TAG...${NC}\n"
-monk update -t "$MONK_TAG" -s environment="$ENVIRONMENT_NAME" "$MONK_WORKLOAD"
+    printf "${GREEN}Deploying workload $MONK_WORKLOAD to tag $MONK_TAG (repo: $MONK_REPO)...${NC}\n"
+    monk update -t "$MONK_TAG" --repo "$MONK_REPO" --secret-scope "$MONK_REPO" \
+        -s environment="$ENVIRONMENT_NAME" "$MONK_WORKLOAD"
+else
+    printf "${GREEN}Loading MANIFEST...${NC}\n"
+    monk load MANIFEST
+
+    printf "${GREEN}Deploying workload $MONK_WORKLOAD to tag $MONK_TAG...${NC}\n"
+    monk update -t "$MONK_TAG" -s environment="$ENVIRONMENT_NAME" "$MONK_WORKLOAD"
+fi
 
 printf "${GREEN}Checking deployment status...${NC}\n"
 monk ps
