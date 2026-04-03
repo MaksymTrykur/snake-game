@@ -1,186 +1,106 @@
 namespace: snake-game
 
-mongo:
-  defines: digitalocean-database/database
-  engine: mongodb
-  region: fra1
-  name: monk-snake-game-mongo
-  size: db-s-1vcpu-2gb
-  num_nodes: 1
-  checks:
-    # DigitalOcean managed MongoDB clusters can take a long time to provision.
-    # Increase readiness window to avoid exhausting attempts while status is still "creating".
-    readiness:
-      attempts: 120
-      initialDelay: 10
-      period: 20
+mongodb:
+  defines: runnable
+  containers:
+    mongodb:
+      image: mongo:7
+  variables:
+    mongo-init-database:
+      type: string
+      value: snakegame
+      env: MONGO_INITDB_DATABASE
+    mongo-init-username:
+      type: string
+      value: snakegame-admin
+      env: MONGO_INITDB_ROOT_USERNAME
+    mongo-init-password:
+      type: string
+      value: <- secret("mongodb-root-password")
+      env: MONGO_INITDB_ROOT_PASSWORD
+  permitted-secrets:
+    mongodb-root-password: true
   services:
-    default:
-      protocol: custom
+    mongodb:
+      container: mongodb
+      port: 27017
+      protocol: tcp
+  checks:
+    readiness:
+      code: tcp-check-service("snake-game/mongodb", "mongodb")
+      period: 10
+      initialDelay: 10
+    liveness:
+      code: tcp-check-service("snake-game/mongodb", "mongodb")
+      period: 30
+      initialDelay: 20
 
 app:
   defines: runnable
   containers:
-    main:
+    app:
       image: snake-game:latest
   services:
     http:
-      container: main
+      container: app
       port: 3001
       protocol: tcp
       ingress-routes:
         web:
           path-prefix: /
   connections:
-    mongo:
-      target: snake-game/mongo
-      service: default
+    mongodb:
+      target: snake-game/mongodb
+      service: mongodb
   depends:
     wait-for:
-      # Ensure the API doesn't start until the managed DB is fully ready (status=online and connection info available).
-      entities:
-        - snake-game/mongo
       runnables:
-        - snake-game/mongo
-      timeout: 1800
+        - snake-game/mongodb
+      timeout: 180
   variables:
+    node-env:
+      type: string
+      value: production
+      env: NODE_ENV
     db-conn:
       type: string
-      value: <- connection-target("mongo") entity-state get-member("connection_uri")
+      value: >-
+        <- "mongodb://" "snakegame-admin" ":" secret("mongodb-root-password") "@"
+        connection-hostname("mongodb") ":" connection-port("mongodb") "/snakegame?authSource=admin"
+        concat-all
       env: DB_CONN
-    mongodb-uri:
-      type: string
-      value: <- connection-target("mongo") entity-state get-member("connection_uri")
-      env: MONGODB_URI
-
-vercel-project:
-  defines: vercel/project
-  name: monk-snake-game-frontend-a1b2
-  secret_ref: default-vercel-token
   permitted-secrets:
-    default-vercel-token: true
-  services:
-    data:
-      protocol: custom
-
-vercel-static-deploy:
-  defines: runnable
-  inherits: vercel/deploy
-  permitted-secrets:
-    default-vercel-token: true
-  containers:
-    deploy:
-      paths:
-        - blobs://frontend:/mnt/frontend
-  services:
-    status:
-      # Lightweight service so other components can "connect" to this runnable for depends wiring.
-      # Note: runnable services cannot use protocol: custom, so we expose an arbitrary TCP port.
-      container: deploy
-      port: 1
-      protocol: tcp
-  connections:
-    project:
-      target: snake-game/vercel-project
-      service: data
-    app:
-      target: snake-game/app
-      service: http
-  depends:
-    wait-for:
-      entities:
-        - snake-game/vercel-project
-      runnables:
-        - snake-game/app
-      timeout: 300
-  variables:
-    project:
-      type: string
-      value: <- connection-target("project") entity-state get-member("name")
-      env: VERCEL_PROJECT
-    deploy-dir:
-      type: string
-      value: /home/node/app
-      env: DEPLOY_DIR
-    backend-origin:
-      type: string
-      value: <- "https://" connection-domain-name("app") concat-all
-      env: BACKEND_ORIGIN
-    pre-deploy:
-      type: string
-      value: |
-        set -euo pipefail
-        mkdir -p "$DEPLOY_DIR"
-        cp -R /mnt/frontend/. "$DEPLOY_DIR"/
-
-        cat > "$DEPLOY_DIR/vercel.json" <<EOF
-        {
-          "rewrites": [
-            { "source": "/highscore", "destination": "${BACKEND_ORIGIN}/highscore" },
-            { "source": "/highscore/:path*", "destination": "${BACKEND_ORIGIN}/highscore/:path*" }
-          ]
-        }
-        EOF
-
-
-vercel-url-ready:
-  defines: utils/wait-for-action
-  target: snake-game/vercel-project
-  action: get-production-urls
-  services:
-    data:
-      protocol: custom
-  depends:
-    wait-for:
-      runnables:
-        - snake-game/vercel-project
-        - snake-game/vercel-static-deploy
-      timeout: 180
+    mongodb-root-password: true
+  checks:
+    readiness:
+      code: http-get-service("snake-game/app", "http", "/") get-member("status") 200 eq?
+      period: 10
+      initialDelay: 15
+    liveness:
+      code: http-get-service("snake-game/app", "http", "/") get-member("status") 200 eq?
+      period: 30
+      initialDelay: 20
 
 endpoints:
   defines: monkec/endpoints
+  entrypoint: app
   endpoints:
-    frontend:
-      description: Snake Game web UI (Vercel)
-      # Use the resolved latest deployment URL, which works for both preview and production.
-      # (Production URLs may not be immediately available right after a deployment.)
-      url: <- "https://" connection-target("vercel-project") entity-state get-member("url")
-    backend:
-      description: Snake Game backend/API (ingress)
-      url: <- "https://" connection-domain-name("app") "/" concat-all
-  entrypoint: frontend
+    app:
+      description: Public HTTPS URL for the snake-game web application.
+      url: <- "https://" connection-domain-name("app") concat-all
   connections:
     app:
       target: snake-game/app
       service: http
-    vercel-project:
-      target: snake-game/vercel-project
-      service: data
-    vercel-deploy:
-      target: snake-game/vercel-static-deploy
-      service: status
-    vercel-url-ready:
-      target: snake-game/vercel-url-ready
-      service: data
   depends:
     wait-for:
       runnables:
         - snake-game/app
-        - snake-game/vercel-static-deploy
-        - snake-game/vercel-url-ready
-      entities:
-        - snake-game/vercel-project
-      timeout: 300
-  services:
-    data:
-      protocol: custom
+      timeout: 180
 
-snake-game-stack:
+stack:
   defines: group
   members:
-    - snake-game/mongo
+    - snake-game/mongodb
     - snake-game/app
-    - snake-game/vercel-project
-    - snake-game/vercel-static-deploy
-    - snake-game/vercel-url-ready
     - snake-game/endpoints

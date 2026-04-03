@@ -6,10 +6,10 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-printf "${GREEN}Monk Capsules - Cleanup${NC}\n"
+printf "${GREEN}Monk Capsules - Cleanup on Existing Cluster${NC}\n"
 
 # Validate required env vars
-for var in CLUSTER_NAME ENVIRONMENT_NAME MONK_CAPSULE_TOKEN MONK_SUBSCRIPTION_API_BASE MONK_AUTH_SERVICE_URL MONK_ORG_SLUG MONK_PROJECT_SLUG; do
+for var in ENVIRONMENT_NAME MONK_CAPSULE_TOKEN MONK_SUBSCRIPTION_API_BASE MONK_AUTH_SERVICE_URL MONK_ORG_SLUG MONK_PROJECT_SLUG; do
     eval val=\$$var
     if [ -z "$val" ]; then
         printf "${RED}Error: $var is required${NC}\n"
@@ -17,10 +17,12 @@ for var in CLUSTER_NAME ENVIRONMENT_NAME MONK_CAPSULE_TOKEN MONK_SUBSCRIPTION_AP
     fi
 done
 
+MONK_WORKLOAD="${MONK_WORKLOAD:-}"
 AUTH_HEADER="Authorization: Bearer $MONK_CAPSULE_TOKEN"
 CAPSULE_DELETE_RECORDS="${CAPSULE_DELETE_RECORDS:-false}"
+ENV_PATH="$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME"
 
-# Mint a short-lived JIT CLI token from the capsule master token
+# Mint a short-lived JIT CLI token
 mint_jit_token() {
     local perms="$1"
     local name="${2:-jit-$$}"
@@ -40,121 +42,91 @@ mint_jit_token() {
     echo "$JIT_TOKEN"
 }
 
-# Configure Monk CLI for non-interactive CI usage
 export MONK_CLI_NO_FANCY=true
 export MONK_CLI_NO_COLOR=true
 export MONK_NO_INTERACTIVE=true
 
-printf "${GREEN}Cleaning up environment: $ENVIRONMENT_NAME (cluster: $CLUSTER_NAME, delete records: $CAPSULE_DELETE_RECORDS)${NC}\n"
+printf "${GREEN}Cleaning up capsule: $ENVIRONMENT_NAME${NC}\n"
 
 # ============================================================================
-# Step 1: Retrieve environment metadata from backend
+# Step 1: Retrieve environment metadata to find cluster monkcode
 # ============================================================================
 printf "${GREEN}Retrieving environment metadata...${NC}\n"
-HTTP_CODE=$(curl -s -o /tmp/env_response.json -w "%{http_code}" \
-    "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME" \
-    -H "$AUTH_HEADER")
-
+HTTP_CODE=$(curl -s -o /tmp/env_response.json -w "%{http_code}" "$ENV_PATH" -H "$AUTH_HEADER")
 if [ "$HTTP_CODE" = "404" ]; then
     printf "${YELLOW}Environment not found (already cleaned up). Exiting.${NC}\n"
     exit 0
 fi
-
 if [ "$HTTP_CODE" != "200" ]; then
     printf "${RED}Error: Failed to retrieve environment (HTTP $HTTP_CODE)${NC}\n"
-    cat /tmp/env_response.json 2>/dev/null || true
     exit 1
 fi
-
 MONKCODE=$(jq -r '.cluster.monkcode // empty' /tmp/env_response.json)
 CLUSTER_ID=$(jq -r '.cluster.clusterId // empty' /tmp/env_response.json)
 
-# Best-effort: mark capsule metadata as down before deleting or deprovisioning.
+# Best-effort: mark capsule metadata as destroyed
 NOW_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-CAPSULE_DESTROY_PAYLOAD=$(jq -n \
-    --arg branch "$ENVIRONMENT_NAME" \
-    --arg status "destroyed" \
-    --arg now "$NOW_UTC" \
-    '{settings:{capsule:{source:"dynenv",branch:$branch,status:$status,lastDestroyedAt:$now,updatedAt:$now}}}')
-curl -sf -X PATCH \
-    "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME" \
-    -H "$AUTH_HEADER" \
-    -H "Content-Type: application/json" \
-    -d "$CAPSULE_DESTROY_PAYLOAD" > /dev/null 2>&1 || true
+curl -sf -X PATCH "$ENV_PATH" \
+    -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+    -d "{\"settings\":{\"capsule\":{\"source\":\"dynenv\",\"status\":\"destroyed\",\"lastDestroyedAt\":\"$NOW_UTC\",\"updatedAt\":\"$NOW_UTC\"}}}" > /dev/null 2>&1 || true
 
 if [ -z "$MONKCODE" ]; then
-    printf "${YELLOW}No cluster linked to environment. Cleaning up backend records only.${NC}\n"
+    printf "${YELLOW}No cluster linked. Cleaning up backend records only.${NC}\n"
 else
     # ============================================================================
-    # Step 2: Start local monkd, join cluster, then nuke
+    # Step 2: Connect to cluster, stop workloads, clean up
     # ============================================================================
-    # We must go through a local monkd so that nuke can properly tear down all
-    # remote nodes. Connecting directly via monkcode:// would leave the node we
-    # happen to talk to dangling.
     printf "${GREEN}Minting JIT CLI token for cleanup...${NC}\n"
-    CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\"]"
-    MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "cleanup-$CLUSTER_NAME" 60)
+    CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\"]"
+    MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "cleanup-$ENVIRONMENT_NAME" 60)
     if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
         printf "${RED}Error: JIT CLI token mint returned empty${NC}\n"
         exit 1
     fi
     export MONK_SERVICE_TOKEN="$MONK_JIT_CLI_TOKEN"
+    export MONK_SOCKET="monkcode://$MONKCODE"
 
-    printf "${GREEN}Starting local Monk daemon...${NC}\n"
-    monkd > /tmp/monkd.log 2>&1 &
-    printf "${GREEN}Waiting for daemon to initialize (up to 60s)...${NC}\n"
-    MONK_WAIT_ELAPSED=0
-    while [ $MONK_WAIT_ELAPSED -lt 60 ]; do
-        if monk --no-interactive --nofancy --nocolor --json version > /dev/null 2>&1; then
-            printf "${GREEN}Daemon responded after ${MONK_WAIT_ELAPSED}s.${NC}\n"
-            break
-        fi
-        sleep 2
-        MONK_WAIT_ELAPSED=$((MONK_WAIT_ELAPSED + 2))
-    done
-    if [ $MONK_WAIT_ELAPSED -ge 60 ]; then
-        printf "${RED}Daemon failed to start within 60s. Log:${NC}\n"
-        cat /tmp/monkd.log 2>/dev/null || true
-        exit 1
+    # Stop and purge workloads using --repo to target the correct templates
+    if [ -n "$MONK_WORKLOAD" ]; then
+        printf "${GREEN}Stopping workload '$MONK_WORKLOAD' (repo: $ENVIRONMENT_NAME)...${NC}\n"
+        monk stop --repo "$ENVIRONMENT_NAME" "$MONK_WORKLOAD" || printf "${YELLOW}Warning: stop failed (may already be stopped)${NC}\n"
+        printf "${GREEN}Deleting workload templates...${NC}\n"
+        monk unload --repo "$ENVIRONMENT_NAME" --no-confirm "$MONK_WORKLOAD" || printf "${YELLOW}Warning: unload failed${NC}\n"
     fi
-    sleep 5
 
-    printf "${GREEN}Joining cluster via monkcode...${NC}\n"
-    monk cluster join --monkcode "$MONKCODE" --local-name "cleanup-runner-$$"
+    # Remove scoped secrets for this environment
+    printf "${GREEN}Removing scoped secrets for '$ENVIRONMENT_NAME'...${NC}\n"
+    monk secrets remove --scope "$ENVIRONMENT_NAME" --all 2>/dev/null || printf "${YELLOW}Warning: scoped secret removal failed${NC}\n"
 
-    printf "${GREEN}Nuking cluster: $CLUSTER_NAME...${NC}\n"
-    monk cluster nuke --force --remove-volumes --remove-snapshots
-    printf "${GREEN}Cluster nuked.${NC}\n"
+    # Remove capsule tag from peers
+    printf "${GREEN}Removing environment tag from peers...${NC}\n"
+    PEERS_JSON=$(monk --json cluster peers)
+    TAGGED_PEERS=$(echo "$PEERS_JSON" | jq -r --arg env "$ENVIRONMENT_NAME" '.[] | select(.tags != null and (.tags | index($env))) | .id')
+    for PEER_ID in $TAGGED_PEERS; do
+        CURRENT_TAGS=$(echo "$PEERS_JSON" | jq -r --arg id "$PEER_ID" '.[] | select(.id == $id) | .tags | join(",")')
+        NEW_TAGS=$(echo "$CURRENT_TAGS" | tr ',' '\n' | grep -v "^$ENVIRONMENT_NAME$" | paste -sd, -)
+        if [ -n "$NEW_TAGS" ]; then
+            monk cluster peer-tags --id "$PEER_ID" --tag "$NEW_TAGS"
+        else
+            monk cluster peer-tags --id "$PEER_ID" --tag "untagged"
+        fi
+        printf "${GREEN}Removed tag from peer $PEER_ID${NC}\n"
+    done
 fi
 
 # ============================================================================
-# Step 3: Clean up backend records
-# Delete cluster first (while it still has project_id for permission checks),
-# then unlink from environment, then delete environment.
+# Step 3: Clean up backend records (DO NOT delete cluster — it's shared)
 # ============================================================================
 printf "${GREEN}Cleaning up backend records...${NC}\n"
 
-# 3a. Delete cluster record
-if [ -n "$CLUSTER_ID" ]; then
-    printf "  Deleting cluster record...\n"
-    curl -sf -X DELETE \
-        "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/clusters/$CLUSTER_ID" \
-        -H "$AUTH_HEADER" || printf "${YELLOW}  Warning: cluster record delete failed${NC}\n"
-fi
-
-# 3b. Unlink cluster from environment
+# Unlink cluster from environment
 printf "  Unlinking cluster from environment...\n"
-curl -sf -X DELETE \
-    "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME/cluster" \
-    -H "$AUTH_HEADER" || printf "${YELLOW}  Warning: unlink failed (may already be unlinked)${NC}\n"
+curl -sf -X DELETE "$ENV_PATH/cluster" -H "$AUTH_HEADER" || printf "${YELLOW}  Warning: unlink failed${NC}\n"
 
-
-# 3c. Delete environment only for permanent cleanup
+# Delete environment record if permanent cleanup
 if [ "$CAPSULE_DELETE_RECORDS" = "true" ]; then
-    printf "  Deleting environment...\n"
-    curl -sf -X DELETE \
-        "$MONK_SUBSCRIPTION_API_BASE/orgs/$MONK_ORG_SLUG/projects/$MONK_PROJECT_SLUG/environments/$ENVIRONMENT_NAME" \
-        -H "$AUTH_HEADER" || printf "${YELLOW}  Warning: environment delete failed${NC}\n"
+    printf "  Deleting environment record...\n"
+    curl -sf -X DELETE "$ENV_PATH" -H "$AUTH_HEADER" || printf "${YELLOW}  Warning: environment delete failed${NC}\n"
 else
     printf "  Keeping environment record for future reprovision.\n"
 fi
