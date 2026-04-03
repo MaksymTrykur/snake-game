@@ -44,17 +44,20 @@ mint_jit_token() {
     echo "$JIT_TOKEN"
 }
 
-printf "${GREEN}Minting JIT CLI token...${NC}\n"
-# Include read:/clusters/** so shared clusters (project_id=nil) can be fetched.
-# Project-scoped permissions handle registry/secrets; cluster manage covers P2P ops.
-CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"]"
-MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "provision-on-cluster-$ENVIRONMENT_NAME" 90)
-if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
-    printf "${RED}Error: JIT CLI token mint returned empty${NC}\n"
-    exit 1
+TARGET_CLUSTER_TOKEN="${TARGET_CLUSTER_TOKEN:-}"
+if [ -n "$TARGET_CLUSTER_TOKEN" ]; then
+    printf "${GREEN}Using service token for cluster authentication.${NC}\n"
+    export MONK_SERVICE_TOKEN="$TARGET_CLUSTER_TOKEN"
+else
+    printf "${GREEN}Minting JIT CLI token...${NC}\n"
+    CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"]"
+    MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "provision-on-cluster-$ENVIRONMENT_NAME" 90)
+    if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
+        printf "${RED}Error: JIT CLI token mint returned empty${NC}\n"
+        exit 1
+    fi
+    export MONK_SERVICE_TOKEN="$MONK_JIT_CLI_TOKEN"
 fi
-
-export MONK_SERVICE_TOKEN="$MONK_JIT_CLI_TOKEN"
 export MONK_CLI_NO_FANCY=true
 export MONK_CLI_NO_COLOR=true
 export MONK_NO_INTERACTIVE=true

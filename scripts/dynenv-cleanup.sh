@@ -76,14 +76,20 @@ else
     # ============================================================================
     # Step 2: Connect to cluster, stop workloads, clean up
     # ============================================================================
-    printf "${GREEN}Minting JIT CLI token for cleanup...${NC}\n"
-    CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\"]"
-    MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "cleanup-$ENVIRONMENT_NAME" 60)
-    if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
-        printf "${RED}Error: JIT CLI token mint returned empty${NC}\n"
-        exit 1
+    TARGET_CLUSTER_TOKEN="${TARGET_CLUSTER_TOKEN:-}"
+    if [ -n "$TARGET_CLUSTER_TOKEN" ]; then
+        printf "${GREEN}Using service token for cluster authentication.${NC}\n"
+        export MONK_SERVICE_TOKEN="$TARGET_CLUSTER_TOKEN"
+    else
+        printf "${GREEN}Minting JIT CLI token for cleanup...${NC}\n"
+        CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\"]"
+        MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "cleanup-$ENVIRONMENT_NAME" 60)
+        if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
+            printf "${RED}Error: JIT CLI token mint returned empty${NC}\n"
+            exit 1
+        fi
+        export MONK_SERVICE_TOKEN="$MONK_JIT_CLI_TOKEN"
     fi
-    export MONK_SERVICE_TOKEN="$MONK_JIT_CLI_TOKEN"
     export MONK_SOCKET="monkcode://$MONKCODE"
 
     # Delete workloads using --repo to target the correct templates
