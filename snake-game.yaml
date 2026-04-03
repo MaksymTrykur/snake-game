@@ -25,15 +25,6 @@ mongodb:
       container: mongodb
       port: 27017
       protocol: tcp
-  checks:
-    readiness:
-      code: tcp-check-service("snake-game/mongodb", "mongodb")
-      period: 10
-      initialDelay: 10
-    liveness:
-      code: tcp-check-service("snake-game/mongodb", "mongodb")
-      period: 30
-      initialDelay: 20
 
 app:
   defines: runnable
@@ -71,15 +62,6 @@ app:
       env: DB_CONN
   permitted-secrets:
     mongodb-root-password: true
-  checks:
-    readiness:
-      code: http-get-service("snake-game/app", "http", "/") get-member("status") 200 eq?
-      period: 10
-      initialDelay: 15
-    liveness:
-      code: http-get-service("snake-game/app", "http", "/") get-member("status") 200 eq?
-      period: 30
-      initialDelay: 20
 
 endpoints:
   defines: monkec/endpoints

@@ -94,10 +94,10 @@ else
 
     # Delete workloads using --repo to target the correct templates
     if [ -n "$MONK_WORKLOAD" ]; then
-        printf "${GREEN}Deleting workload '$MONK_WORKLOAD' (repo: $ENVIRONMENT_NAME)...${NC}\n"
-        monk delete --repo "$ENVIRONMENT_NAME" "$MONK_WORKLOAD" || printf "${YELLOW}Warning: delete failed (may already be removed)${NC}\n"
+        printf "${GREEN}Deleting workload '$ENVIRONMENT_NAME/$MONK_WORKLOAD' (repo: $ENVIRONMENT_NAME)...${NC}\n"
+        monk delete --repo "$ENVIRONMENT_NAME" "$ENVIRONMENT_NAME/$MONK_WORKLOAD" || printf "${YELLOW}Warning: delete failed (may already be removed)${NC}\n"
         printf "${GREEN}Unloading workload templates...${NC}\n"
-        monk unload --repo "$ENVIRONMENT_NAME" --no-confirm "$MONK_WORKLOAD" || printf "${YELLOW}Warning: unload failed${NC}\n"
+        monk unload --repo "$ENVIRONMENT_NAME" --no-confirm "$ENVIRONMENT_NAME/$MONK_WORKLOAD" || printf "${YELLOW}Warning: unload failed${NC}\n"
     fi
 
     # Remove scoped secrets for this environment

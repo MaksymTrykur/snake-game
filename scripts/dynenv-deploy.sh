@@ -43,9 +43,9 @@ if [ -n "$MONK_REPO" ]; then
     printf "${GREEN}Loading MANIFEST into repo '$MONK_REPO'...${NC}\n"
     monk load --repo "$MONK_REPO" MANIFEST
 
-    printf "${GREEN}Deploying workload $MONK_WORKLOAD to tag $MONK_TAG (repo: $MONK_REPO)...${NC}\n"
+    printf "${GREEN}Deploying workload $MONK_REPO/$MONK_WORKLOAD to tag $MONK_TAG...${NC}\n"
     monk update -t "$MONK_TAG" --repo "$MONK_REPO" --secret-scope "$MONK_REPO" \
-        -s environment="$ENVIRONMENT_NAME" "$MONK_WORKLOAD"
+        -s environment="$ENVIRONMENT_NAME" "$MONK_REPO/$MONK_WORKLOAD"
 else
     printf "${GREEN}Loading MANIFEST...${NC}\n"
     monk load MANIFEST
