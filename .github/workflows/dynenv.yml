@@ -314,19 +314,26 @@ jobs:
           echo "::add-mask::$MONKCODE"
           echo "monkcode=$(echo -n "$MONKCODE" | base64 -w0 | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-          # Step 2: Mint JIT CLI token for registry retrieval
-          echo "Minting JIT CLI token..."
-          if ! JIT_RESPONSE=$(curl -sf -X POST "$MONK_AUTH_SERVICE_URL/api-keys" \
-              -H "Authorization: Bearer $MONK_CAPSULE_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"name\":\"fetch-meta-$ENVIRONMENT_NAME\",\"permissions\":[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"],\"expires_in_minutes\":30}"); then
-              echo "::error::Failed to mint JIT CLI token (HTTP error)"
-              exit 1
-          fi
-          MONK_JIT_CLI_TOKEN=$(echo "$JIT_RESPONSE" | jq -r '.jwt // empty')
-          if [ -z "$MONK_JIT_CLI_TOKEN" ]; then
-              echo "::error::Failed to mint JIT CLI token (empty response)"
-              exit 1
+          # Step 2: Obtain CLI token for registry retrieval.
+          # Prefer service token (cluster-issued) over JIT-minted token.
+          TARGET_CLUSTER_TOKEN="${TARGET_CLUSTER_TOKEN:-}"
+          if [ -n "$TARGET_CLUSTER_TOKEN" ]; then
+              echo "Using service token for cluster authentication."
+              MONK_JIT_CLI_TOKEN="$TARGET_CLUSTER_TOKEN"
+          else
+              echo "Minting JIT CLI token..."
+              if ! JIT_RESPONSE=$(curl -sf -X POST "$MONK_AUTH_SERVICE_URL/api-keys" \
+                  -H "Authorization: Bearer $MONK_CAPSULE_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"name\":\"fetch-meta-$ENVIRONMENT_NAME\",\"permissions\":[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"],\"expires_in_minutes\":30}"); then
+                  echo "::error::Failed to mint JIT CLI token (HTTP error)"
+                  exit 1
+              fi
+              MONK_JIT_CLI_TOKEN=$(echo "$JIT_RESPONSE" | jq -r '.jwt // empty')
+              if [ -z "$MONK_JIT_CLI_TOKEN" ]; then
+                  echo "::error::Failed to mint JIT CLI token (empty response)"
+                  exit 1
+              fi
           fi
           echo "::add-mask::$MONK_JIT_CLI_TOKEN"
           echo "monk_jit_cli_token=$(echo -n "$MONK_JIT_CLI_TOKEN" | base64 -w0 | base64 -w0)" >> "$GITHUB_OUTPUT"
@@ -384,6 +391,7 @@ jobs:
           MONK_ORG_SLUG: ${{ vars.MONK_ORG_SLUG }}
           MONK_PROJECT_SLUG: ${{ vars.MONK_PROJECT_SLUG }}
           ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
+          TARGET_CLUSTER_TOKEN: ${{ secrets.TARGET_CLUSTER_TOKEN }}
 
   build-images:
     needs: [resolve-context, fetch-metadata]
