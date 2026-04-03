@@ -639,7 +639,6 @@ jobs:
           CAPSULE_DELETE_RECORDS: ${{ needs.resolve-context.outputs.action == 'destroy' && 'true' || 'false' }}
           TARGET_CLUSTER_TOKEN: ${{ secrets.TARGET_CLUSTER_TOKEN }}
           TARGET_CLUSTER_ID: ${{ vars.TARGET_CLUSTER_ID }}
-          MONK_PROJECT_SLUG: ${{ vars.MONK_PROJECT_SLUG }}
       - name: Deactivate GitHub Deployment
         if: ${{ always() && env.ACT != 'true' }}
         continue-on-error: true
