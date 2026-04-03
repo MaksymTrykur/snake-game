@@ -92,17 +92,22 @@ else
     fi
     export MONK_SOCKET="monkcode://$MONKCODE"
 
-    # Delete workloads using --repo to target the correct templates
+    # Delete workloads using fully qualified repo/workload path
     if [ -n "$MONK_WORKLOAD" ]; then
-        printf "${GREEN}Deleting workload '$ENVIRONMENT_NAME/$MONK_WORKLOAD' (repo: $ENVIRONMENT_NAME)...${NC}\n"
-        monk delete --repo "$ENVIRONMENT_NAME" "$ENVIRONMENT_NAME/$MONK_WORKLOAD" || printf "${YELLOW}Warning: delete failed (may already be removed)${NC}\n"
+        printf "${GREEN}Deleting workload '$ENVIRONMENT_NAME/$MONK_WORKLOAD'...${NC}\n"
+        monk delete "$ENVIRONMENT_NAME/$MONK_WORKLOAD" --no-confirm 2>/dev/null || printf "${YELLOW}Warning: delete failed (may already be removed)${NC}\n"
         printf "${GREEN}Unloading workload templates...${NC}\n"
-        monk unload --repo "$ENVIRONMENT_NAME" --no-confirm "$ENVIRONMENT_NAME/$MONK_WORKLOAD" || printf "${YELLOW}Warning: unload failed${NC}\n"
+        monk unload --repo "$ENVIRONMENT_NAME" --no-confirm "$ENVIRONMENT_NAME/$MONK_WORKLOAD" 2>/dev/null || printf "${YELLOW}Warning: unload failed${NC}\n"
     fi
 
-    # Remove scoped secrets for this environment
-    printf "${GREEN}Removing scoped secrets for '$ENVIRONMENT_NAME'...${NC}\n"
-    monk secrets remove --scope "$ENVIRONMENT_NAME" --all 2>/dev/null || printf "${YELLOW}Warning: scoped secret removal failed${NC}\n"
+    # Remove scoped secrets — secrets remove has no --all, remove each key individually
+    if [ -n "$WORKLOAD_SECRETS" ]; then
+        printf "${GREEN}Removing scoped secrets for '$ENVIRONMENT_NAME'...${NC}\n"
+        for mapping in $WORKLOAD_SECRETS; do
+            KEY=$(echo "$mapping" | cut -d: -f1)
+            monk secrets remove --scope "$ENVIRONMENT_NAME" "$KEY" 2>/dev/null || printf "${YELLOW}Warning: failed to remove secret '$KEY'${NC}\n"
+        done
+    fi
 fi
 
 # ============================================================================

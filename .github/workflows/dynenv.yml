@@ -200,7 +200,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: monk-capsules
     container:
-      image: monkreleases.azurecr.io/monk-ci:dev
+      image: monkreleases.azurecr.io/monk-ci:ci
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq apache2-utils nodejs
@@ -271,7 +271,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: monk-capsules
     container:
-      image: monkreleases.azurecr.io/monk-ci:dev
+      image: monkreleases.azurecr.io/monk-ci:ci
     outputs:
       monkcode: ${{ steps.meta.outputs.monkcode }}
       monk_jit_cli_token: ${{ steps.meta.outputs.monk_jit_cli_token }}
@@ -439,7 +439,7 @@ jobs:
       name: capsule-${{ needs.resolve-context.outputs.environment_name }}
       url: ${{ steps.preview_url.outputs.url }}
     container:
-      image: monkreleases.azurecr.io/monk-ci:dev
+      image: monkreleases.azurecr.io/monk-ci:ci
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq nodejs
@@ -484,7 +484,12 @@ jobs:
           # Prefer explicit workload namespace endpoints over peer node domain inference.
           if [ -n "$MONK_WORKLOAD" ] && echo "$MONK_WORKLOAD" | grep -q '/'; then
             WORKLOAD_NAMESPACE="${MONK_WORKLOAD%/*}"
-            ENDPOINT_ENTITY="${WORKLOAD_NAMESPACE}/endpoints"
+            MONK_REPO="${MONK_REPO:-}"
+            if [ -n "$MONK_REPO" ]; then
+              ENDPOINT_ENTITY="${MONK_REPO}/${WORKLOAD_NAMESPACE}/endpoints"
+            else
+              ENDPOINT_ENTITY="${WORKLOAD_NAMESPACE}/endpoints"
+            fi
             if ENDPOINTS_JSON=$(monk --json --no-events describe "$ENDPOINT_ENTITY" 2>/tmp/endpoints_describe_err.log); then
               PREVIEW_URL=$(echo "$ENDPOINTS_JSON" | jq -r '
                 [
@@ -628,7 +633,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: monk-capsules
     container:
-      image: monkreleases.azurecr.io/monk-ci:dev
+      image: monkreleases.azurecr.io/monk-ci:ci
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq nodejs
