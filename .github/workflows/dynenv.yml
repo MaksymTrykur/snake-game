@@ -200,7 +200,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: monk-capsules
     container:
-      image: monkreleases.azurecr.io/monk-ci:ci
+      image: monkreleases.azurecr.io/monk-ci:dev
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq apache2-utils nodejs
@@ -271,7 +271,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: monk-capsules
     container:
-      image: monkreleases.azurecr.io/monk-ci:ci
+      image: monkreleases.azurecr.io/monk-ci:dev
     outputs:
       monkcode: ${{ steps.meta.outputs.monkcode }}
       monk_jit_cli_token: ${{ steps.meta.outputs.monk_jit_cli_token }}
@@ -439,7 +439,7 @@ jobs:
       name: capsule-${{ needs.resolve-context.outputs.environment_name }}
       url: ${{ steps.preview_url.outputs.url }}
     container:
-      image: monkreleases.azurecr.io/monk-ci:ci
+      image: monkreleases.azurecr.io/monk-ci:dev
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq nodejs
@@ -633,7 +633,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: monk-capsules
     container:
-      image: monkreleases.azurecr.io/monk-ci:ci
+      image: monkreleases.azurecr.io/monk-ci:dev
     steps:
       - name: Install dependencies
         run: apk add --no-cache curl jq nodejs
