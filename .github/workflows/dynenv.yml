@@ -231,12 +231,9 @@ jobs:
           CLOUD_INSTANCE_COUNT: ${{ vars.CLOUD_INSTANCE_COUNT }}
           CLOUD_DISK_SIZE: ${{ vars.CLOUD_DISK_SIZE }}
           BRANCH_TAG: ${{ needs.resolve-context.outputs.branch_tag }}
+          DO_API_TOKEN: ${{ secrets.DO_API_TOKEN }}
           MONGODB_ROOT_PASSWORD: ${{ secrets.MONGODB_ROOT_PASSWORD }}
           WORKLOAD_SECRETS: "mongodb-root-password:MONGODB_ROOT_PASSWORD"
-          TARGET_CLUSTER_ID: ${{ vars.TARGET_CLUSTER_ID }}
-          PEER_POOL_TAG: ${{ vars.PEER_POOL_TAG }}
-          MONK_REPO: ${{ needs.resolve-context.outputs.environment_name }}
-          TARGET_CLUSTER_TOKEN: ${{ secrets.TARGET_CLUSTER_TOKEN }}
       - name: Create pull request for branch lifecycle
         if: ${{ success() && env.ACT != 'true' }}
         run: |
@@ -391,7 +388,6 @@ jobs:
           MONK_ORG_SLUG: ${{ vars.MONK_ORG_SLUG }}
           MONK_PROJECT_SLUG: ${{ vars.MONK_PROJECT_SLUG }}
           ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
-          TARGET_CLUSTER_TOKEN: ${{ secrets.TARGET_CLUSTER_TOKEN }}
 
   build-images:
     needs: [resolve-context, fetch-metadata]
@@ -465,6 +461,8 @@ jobs:
           BRANCH_TAG: ${{ needs.resolve-context.outputs.branch_tag }}
           MONK_WORKLOAD: "snake-game/stack"
           ENVIRONMENT_NAME: ${{ needs.resolve-context.outputs.environment_name }}
+          CAPSULE_MODE: ${{ vars.CAPSULE_MODE }}
+          PEER_POOL_TAG: ${{ vars.PEER_POOL_TAG }}
       - name: Get preview URL
         id: preview_url
         continue-on-error: true
@@ -535,7 +533,6 @@ jobs:
           MONK_WORKLOAD: "snake-game/stack"
           CAPSULE_MODE: ${{ vars.CAPSULE_MODE }}
           PEER_POOL_TAG: ${{ vars.PEER_POOL_TAG }}
-          MONK_REPO: ${{ needs.resolve-context.outputs.environment_name }}
       - name: Update capsule metadata (success)
         if: ${{ success() }}
         run: |
@@ -648,8 +645,6 @@ jobs:
           MONK_PROJECT_SLUG: ${{ vars.MONK_PROJECT_SLUG }}
           CAPSULE_DELETE_RECORDS: ${{ needs.resolve-context.outputs.action == 'destroy' && 'true' || 'false' }}
           MONK_WORKLOAD: "snake-game/stack"
-          TARGET_CLUSTER_TOKEN: ${{ secrets.TARGET_CLUSTER_TOKEN }}
-          TARGET_CLUSTER_ID: ${{ vars.TARGET_CLUSTER_ID }}
       - name: Deactivate GitHub Deployment
         if: ${{ always() && env.ACT != 'true' }}
         continue-on-error: true

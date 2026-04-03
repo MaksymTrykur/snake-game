@@ -18,15 +18,12 @@ for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD ENVIRONMENT_NAME; do
     fi
 done
 
-MONK_REPO="${MONK_REPO:-}"
-CAPSULE_MODE="${CAPSULE_MODE:-}"
-# Detect shared-cluster mode: MONK_REPO set, CAPSULE_MODE=cluster, or PEER_POOL_TAG set.
-# This makes the script resilient to workflows that may not pass all vars.
-if [ -n "$MONK_REPO" ] || [ "$CAPSULE_MODE" = "cluster" ] || [ -n "${PEER_POOL_TAG:-}" ]; then
+CAPSULE_MODE="${CAPSULE_MODE:-cloud}"
+if [ "$CAPSULE_MODE" = "cluster" ]; then
+    MONK_REPO="$ENVIRONMENT_NAME"
     MONK_TAG="${PEER_POOL_TAG:-capsule-pool}"
-    # Derive MONK_REPO from environment name if not explicitly passed
-    MONK_REPO="${MONK_REPO:-$ENVIRONMENT_NAME}"
 else
+    MONK_REPO=""
     MONK_TAG="${BRANCH_TAG:-default}"
 fi
 
@@ -41,8 +38,7 @@ if [ ! -f "MANIFEST" ]; then
     exit 1
 fi
 
-# When MONK_REPO is set (shared cluster), load under a dedicated repo namespace
-# and use --repo/--secret-scope flags on update for isolation.
+# When MONK_REPO is set (shared cluster), load under a dedicated repo namespace.
 if [ -n "$MONK_REPO" ]; then
     printf "${GREEN}Loading MANIFEST into repo '$MONK_REPO'...${NC}\n"
     monk load --repo "$MONK_REPO" MANIFEST
