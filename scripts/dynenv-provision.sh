@@ -45,6 +45,8 @@ mint_jit_token() {
 }
 
 printf "${GREEN}Minting JIT CLI token...${NC}\n"
+# Include read:/clusters/** so shared clusters (project_id=nil) can be fetched.
+# Project-scoped permissions handle registry/secrets; cluster manage covers P2P ops.
 CLI_PERMS="[\"manage:/projects/$MONK_PROJECT_SLUG/clusters/**\",\"manage:/projects/$MONK_PROJECT_SLUG/secrets/**\",\"manage:/projects/$MONK_PROJECT_SLUG/registry/**\"]"
 MONK_JIT_CLI_TOKEN=$(mint_jit_token "$CLI_PERMS" "provision-on-cluster-$ENVIRONMENT_NAME" 90)
 if [ -z "$MONK_JIT_CLI_TOKEN" ] || [ "$MONK_JIT_CLI_TOKEN" = "null" ]; then
