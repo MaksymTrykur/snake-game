@@ -534,6 +534,7 @@ jobs:
           MONK_JIT_CLI_TOKEN_B64: ${{ needs.fetch-metadata.outputs.monk_jit_cli_token }}
           MONK_WORKLOAD: "snake-game/stack"
           MONK_REPO: ${{ needs.resolve-context.outputs.environment_name }}
+          PEER_POOL_TAG: ${{ vars.PEER_POOL_TAG }}
       - name: Update capsule metadata (success)
         if: ${{ success() }}
         run: |

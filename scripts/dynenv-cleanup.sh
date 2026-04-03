@@ -103,21 +103,6 @@ else
     # Remove scoped secrets for this environment
     printf "${GREEN}Removing scoped secrets for '$ENVIRONMENT_NAME'...${NC}\n"
     monk secrets remove --scope "$ENVIRONMENT_NAME" --all 2>/dev/null || printf "${YELLOW}Warning: scoped secret removal failed${NC}\n"
-
-    # Remove capsule tag from peers
-    printf "${GREEN}Removing environment tag from peers...${NC}\n"
-    PEERS_JSON=$(monk --json cluster peers)
-    TAGGED_PEERS=$(echo "$PEERS_JSON" | jq -r --arg env "$ENVIRONMENT_NAME" '.[] | select(.tags != null and (.tags | index($env))) | .id')
-    for PEER_ID in $TAGGED_PEERS; do
-        CURRENT_TAGS=$(echo "$PEERS_JSON" | jq -r --arg id "$PEER_ID" '.[] | select(.id == $id) | .tags | join(",")')
-        NEW_TAGS=$(echo "$CURRENT_TAGS" | tr ',' '\n' | grep -v "^$ENVIRONMENT_NAME$" | paste -sd, -)
-        if [ -n "$NEW_TAGS" ]; then
-            monk cluster peer-tags --id "$PEER_ID" --tag "$NEW_TAGS"
-        else
-            monk cluster peer-tags --id "$PEER_ID" --tag "untagged"
-        fi
-        printf "${GREEN}Removed tag from peer $PEER_ID${NC}\n"
-    done
 fi
 
 # ============================================================================

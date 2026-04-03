@@ -84,45 +84,19 @@ fi
 printf "${GREEN}Target cluster: $CLUSTER_NAME (ID: $CLUSTER_ID)${NC}\n"
 
 # ============================================================================
-# Step 2: Connect to cluster and allocate peer from pool
+# Step 2: Verify pool nodes are available
 # ============================================================================
 export MONK_SOCKET="monkcode://$MONKCODE"
 
 printf "${GREEN}Listing peers with pool tag '$PEER_POOL_TAG'...${NC}\n"
 PEERS_JSON=$(monk --json cluster peers)
-POOL_PEERS=$(echo "$PEERS_JSON" | jq -r --arg tag "$PEER_POOL_TAG" '[.[] | select(.tags != null and (.tags | index($tag)))]')
-POOL_COUNT=$(echo "$POOL_PEERS" | jq 'length')
+POOL_COUNT=$(echo "$PEERS_JSON" | jq --arg tag "$PEER_POOL_TAG" '[.[] | select(.tags != null and (.tags | index($tag)))] | length')
 
 if [ "$POOL_COUNT" -eq 0 ]; then
     printf "${RED}Error: No peers found with pool tag '$PEER_POOL_TAG'${NC}\n"
     exit 1
 fi
-printf "${GREEN}Found $POOL_COUNT peer(s) in pool.${NC}\n"
-
-# Pick a peer that doesn't already have the environment tag
-SELECTED_PEER_ID=""
-SELECTED_PEER_TAGS=""
-for i in $(seq 0 $((POOL_COUNT - 1))); do
-    PEER_ID=$(echo "$POOL_PEERS" | jq -r ".[$i].id")
-    PEER_TAGS=$(echo "$POOL_PEERS" | jq -r ".[$i].tags | join(\",\")")
-    HAS_ENV_TAG=$(echo "$POOL_PEERS" | jq -r --arg env "$ENVIRONMENT_NAME" ".[$i].tags | index(\$env) // \"no\"")
-    if [ "$HAS_ENV_TAG" = "no" ] || [ "$HAS_ENV_TAG" = "null" ]; then
-        SELECTED_PEER_ID="$PEER_ID"
-        SELECTED_PEER_TAGS="$PEER_TAGS"
-        break
-    fi
-done
-
-if [ -z "$SELECTED_PEER_ID" ]; then
-    printf "${RED}Error: All pool peers are already allocated. No available peers for capsule '$ENVIRONMENT_NAME'.${NC}\n"
-    exit 1
-fi
-printf "${GREEN}Selected peer: $SELECTED_PEER_ID${NC}\n"
-
-# Tag the selected peer with the capsule environment name
-NEW_TAGS="$SELECTED_PEER_TAGS,$ENVIRONMENT_NAME"
-printf "${GREEN}Tagging peer with '$ENVIRONMENT_NAME'...${NC}\n"
-monk cluster peer-tags --id "$SELECTED_PEER_ID" --tag "$NEW_TAGS"
+printf "${GREEN}Found $POOL_COUNT peer(s) in pool — deploying across all.${NC}\n"
 
 # ============================================================================
 # Step 3: Seed scoped secrets for this environment

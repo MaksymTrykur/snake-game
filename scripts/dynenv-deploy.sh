@@ -18,8 +18,14 @@ for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD ENVIRONMENT_NAME; do
     fi
 done
 
-MONK_TAG="${BRANCH_TAG:-default}"
 MONK_REPO="${MONK_REPO:-}"
+# For shared-cluster mode deploy to the pool tag so all pool nodes are eligible.
+# For cloud mode use the branch tag (each branch owns its own cluster/tag).
+if [ -n "$MONK_REPO" ] && [ -n "$PEER_POOL_TAG" ]; then
+    MONK_TAG="$PEER_POOL_TAG"
+else
+    MONK_TAG="${BRANCH_TAG:-default}"
+fi
 
 # Configure Monk CLI for non-interactive CI usage
 export MONK_SOCKET="monkcode://$MONKCODE"
