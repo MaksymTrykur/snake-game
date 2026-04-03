@@ -86,11 +86,11 @@ else
     export MONK_SERVICE_TOKEN="$MONK_JIT_CLI_TOKEN"
     export MONK_SOCKET="monkcode://$MONKCODE"
 
-    # Stop and purge workloads using --repo to target the correct templates
+    # Delete workloads using --repo to target the correct templates
     if [ -n "$MONK_WORKLOAD" ]; then
-        printf "${GREEN}Stopping workload '$MONK_WORKLOAD' (repo: $ENVIRONMENT_NAME)...${NC}\n"
-        monk stop --repo "$ENVIRONMENT_NAME" "$MONK_WORKLOAD" || printf "${YELLOW}Warning: stop failed (may already be stopped)${NC}\n"
-        printf "${GREEN}Deleting workload templates...${NC}\n"
+        printf "${GREEN}Deleting workload '$MONK_WORKLOAD' (repo: $ENVIRONMENT_NAME)...${NC}\n"
+        monk delete --repo "$ENVIRONMENT_NAME" "$MONK_WORKLOAD" || printf "${YELLOW}Warning: delete failed (may already be removed)${NC}\n"
+        printf "${GREEN}Unloading workload templates...${NC}\n"
         monk unload --repo "$ENVIRONMENT_NAME" --no-confirm "$MONK_WORKLOAD" || printf "${YELLOW}Warning: unload failed${NC}\n"
     fi
 

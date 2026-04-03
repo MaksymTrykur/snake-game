@@ -233,6 +233,9 @@ jobs:
           BRANCH_TAG: ${{ needs.resolve-context.outputs.branch_tag }}
           MONGODB_ROOT_PASSWORD: ${{ secrets.MONGODB_ROOT_PASSWORD }}
           WORKLOAD_SECRETS: "mongodb-root-password:MONGODB_ROOT_PASSWORD"
+          TARGET_CLUSTER_ID: ${{ vars.TARGET_CLUSTER_ID }}
+          PEER_POOL_TAG: ${{ vars.PEER_POOL_TAG }}
+          MONK_REPO: ${{ needs.resolve-context.outputs.environment_name }}
       - name: Create pull request for branch lifecycle
         if: ${{ success() && env.ACT != 'true' }}
         run: |
@@ -521,6 +524,7 @@ jobs:
           MONKCODE_B64: ${{ needs.fetch-metadata.outputs.monkcode }}
           MONK_JIT_CLI_TOKEN_B64: ${{ needs.fetch-metadata.outputs.monk_jit_cli_token }}
           MONK_WORKLOAD: "snake-game/stack"
+          MONK_REPO: ${{ needs.resolve-context.outputs.environment_name }}
       - name: Update capsule metadata (success)
         if: ${{ success() }}
         run: |
