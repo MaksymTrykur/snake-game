@@ -19,11 +19,13 @@ for var in MONKCODE MONK_SERVICE_TOKEN MONK_WORKLOAD ENVIRONMENT_NAME; do
 done
 
 MONK_REPO="${MONK_REPO:-}"
-# For shared-cluster mode (MONK_REPO set): deploy to the pool tag.
-# Fall back to "capsule-pool" default if PEER_POOL_TAG var wasn't passed.
-# For cloud mode use the branch tag (each branch owns its own cluster/tag).
-if [ -n "$MONK_REPO" ]; then
+CAPSULE_MODE="${CAPSULE_MODE:-}"
+# Detect shared-cluster mode: MONK_REPO set, CAPSULE_MODE=cluster, or PEER_POOL_TAG set.
+# This makes the script resilient to workflows that may not pass all vars.
+if [ -n "$MONK_REPO" ] || [ "$CAPSULE_MODE" = "cluster" ] || [ -n "${PEER_POOL_TAG:-}" ]; then
     MONK_TAG="${PEER_POOL_TAG:-capsule-pool}"
+    # Derive MONK_REPO from environment name if not explicitly passed
+    MONK_REPO="${MONK_REPO:-$ENVIRONMENT_NAME}"
 else
     MONK_TAG="${BRANCH_TAG:-default}"
 fi
